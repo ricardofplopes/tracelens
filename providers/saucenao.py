@@ -27,9 +27,12 @@ class SauceNAOProvider(BaseProvider):
             if api_key:
                 params["api_key"] = api_key
 
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            }
             with open(image_path, "rb") as f:
                 files = {"file": ("image.jpg", f, "image/jpeg")}
-                async with httpx.AsyncClient(timeout=self.TIMEOUT, follow_redirects=True) as client:
+                async with httpx.AsyncClient(timeout=self.TIMEOUT, follow_redirects=True, headers=headers) as client:
                     resp = await client.post(self.API_URL, params=params, files=files)
                     resp.raise_for_status()
 

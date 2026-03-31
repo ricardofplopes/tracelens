@@ -129,8 +129,9 @@ async def create_job(
 
     # Dispatch celery task
     try:
-        from worker.celery_app import celery_app
-        celery_app.send_task("worker.tasks.run_pipeline", args=[str(job_id)])
+        from celery import Celery
+        celery_client = Celery(broker=settings.CELERY_BROKER_URL)
+        celery_client.send_task("worker.tasks.run_pipeline", args=[str(job_id)])
         logger.info("job_dispatched", job_id=str(job_id))
     except Exception as e:
         logger.error("celery_dispatch_failed", error=str(e))

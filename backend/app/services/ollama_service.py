@@ -15,7 +15,7 @@ class OllamaService:
         self.host = settings.OLLAMA_HOST
         self.vision_model = settings.OLLAMA_VISION_MODEL
         self.text_model = settings.OLLAMA_TEXT_MODEL
-        self.timeout = 120.0
+        self.timeout = 600.0
 
     def _encode_image(self, image_path: str) -> str:
         """Encode image to base64 for Ollama API."""

@@ -46,7 +46,11 @@ class WikimediaProvider(BaseProvider):
                     "iiurlwidth": "300",
                 }
 
-                async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
+                headers = {
+                    "User-Agent": "TraceLens/1.0 (https://github.com/ricardofplopes/tracelens; image-investigation-tool)",
+                    "Accept": "application/json",
+                }
+                async with httpx.AsyncClient(timeout=self.TIMEOUT, headers=headers) as client:
                     resp = await client.get(self.API_URL, params=params)
                     resp.raise_for_status()
 
@@ -99,7 +103,10 @@ class WikimediaProvider(BaseProvider):
 
     async def healthcheck(self) -> dict:
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            headers = {
+                "User-Agent": "TraceLens/1.0 (https://github.com/ricardofplopes/tracelens; image-investigation-tool)",
+            }
+            async with httpx.AsyncClient(timeout=10, headers=headers) as client:
                 resp = await client.get(self.API_URL, params={"action": "query", "meta": "siteinfo", "format": "json"})
                 return {
                     "healthy": resp.status_code == 200,

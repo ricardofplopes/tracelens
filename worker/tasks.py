@@ -187,26 +187,44 @@ def build_search_terms(session: Session, job_id: str, analysis: dict) -> list[st
     ocr_text = feature.ocr_text if feature else None
     exif_data = feature.exif_data if feature else None
 
-    ollama = OllamaService()
+    # Check if analysis has real content (not just an error fallback)
+    has_analysis = bool(
+        analysis.get("raw_description")
+        or analysis.get("entities")
+        or analysis.get("brands")
+        or analysis.get("landmarks")
+    )
 
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        terms = loop.run_until_complete(
-            ollama.generate_search_terms(analysis, ocr_text, exif_data)
-        )
-        loop.close()
-        logger.info("search_terms_built", job_id=job_id, terms=terms)
-        return terms
-    except Exception as e:
-        logger.error("search_term_generation_failed", job_id=job_id, error=str(e))
-        # Fallback terms from entities
-        fallback = []
-        if analysis.get("entities"):
-            fallback.extend(analysis["entities"][:2])
-        if ocr_text:
-            fallback.append(ocr_text[:50])
-        return fallback
+    # Only call Ollama for search terms if we have meaningful evidence
+    if has_analysis or ocr_text:
+        ollama = OllamaService()
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            terms = loop.run_until_complete(
+                ollama.generate_search_terms(analysis, ocr_text, exif_data)
+            )
+            loop.close()
+            logger.info("search_terms_built", job_id=job_id, terms=terms)
+            return terms
+        except Exception as e:
+            logger.error("search_term_generation_failed", job_id=job_id, error=str(e))
+
+    # Fallback terms from entities, OCR, and EXIF
+    fallback = []
+    if analysis.get("entities"):
+        fallback.extend(analysis["entities"][:2])
+    if analysis.get("brands"):
+        fallback.extend(analysis["brands"][:2])
+    if ocr_text:
+        # Use first meaningful words from OCR
+        words = ocr_text.strip().split()
+        if words:
+            fallback.append(" ".join(words[:8]))
+    if not fallback:
+        fallback.append("image")
+    logger.info("search_terms_fallback", job_id=job_id, terms=fallback)
+    return fallback
 
 
 def run_providers(session: Session, job_id: str, analysis: dict, search_terms: list[str]):

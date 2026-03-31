@@ -45,3 +45,4 @@ htmlcov/
 # Logs
 *.log
 logs/
+test_upload.png
