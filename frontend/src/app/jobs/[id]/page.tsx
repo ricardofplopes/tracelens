@@ -184,8 +184,8 @@ export default function JobPage() {
     return true;
   });
 
-  const providerNames = [...new Set(candidates.map((c) => c.provider_name))];
-  const matchTypes = [...new Set(candidates.map((c) => c.match_type))];
+  const providerNames = Array.from(new Set(candidates.map((c) => c.provider_name)));
+  const matchTypes = Array.from(new Set(candidates.map((c) => c.match_type)));
 
   const originalAsset = assets.find((a) => a.variant === "original");
 

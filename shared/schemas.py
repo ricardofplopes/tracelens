@@ -58,9 +58,9 @@ class CandidateResultResponse(BaseModel):
     similarity_score: Optional[float] = None
     confidence: Optional[float] = None
     extracted_text: Optional[str] = None
-    metadata: Optional[dict] = None
+    metadata: Optional[dict] = Field(None, alias="extra_data")
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 class ProviderRunResponse(BaseModel):

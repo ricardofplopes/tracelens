@@ -18,7 +18,7 @@ class CandidateResult(Base):
     similarity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    extra_data: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
 
     job = relationship("Job", back_populates="candidates")
     provider_run = relationship("ProviderRun", back_populates="candidates")

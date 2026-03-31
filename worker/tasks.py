@@ -270,7 +270,7 @@ def run_providers(session: Session, job_id: str, analysis: dict, search_terms: l
                     similarity_score=r.similarity_score,
                     confidence=r.confidence,
                     extracted_text=r.extracted_text,
-                    metadata=r.metadata,
+                    extra_data=r.metadata,
                 )
                 session.add(candidate)
 
@@ -316,7 +316,7 @@ def score_and_rank(session: Session, job_id: str):
             "page_title": candidate.page_title,
             "similarity_score": candidate.similarity_score or 0,
             "extracted_text": candidate.extracted_text or "",
-            "metadata": candidate.metadata or {},
+            "metadata": candidate.extra_data or {},
         }
 
         confidence = score_candidate(candidate_dict, features_dict, provider_name)
