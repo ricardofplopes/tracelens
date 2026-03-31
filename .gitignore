@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Uploads
+uploads/*
+!uploads/.gitkeep
+
+# Next.js
+frontend/.next/
+frontend/out/
+
+# Python
+*.so
+htmlcov/
+.coverage
+.mypy_cache/
+.ruff_cache/
+
+# Logs
+*.log
+logs/
