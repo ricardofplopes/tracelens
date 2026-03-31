@@ -54,7 +54,7 @@ export default function HomePage() {
     setError("");
 
     try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const API_BASE = "";
       const formData = new FormData();
       if (file) {
         formData.append("file", file);
