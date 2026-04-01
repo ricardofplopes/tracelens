@@ -84,10 +84,10 @@ export default function HomePage() {
   return (
     <div className="max-w-3xl mx-auto">
       <div className="text-center mb-10">
-        <h1 className="text-4xl font-bold mb-3 pb-1 bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent leading-normal">
+        <h1 className="text-4xl font-semibold mb-3 pb-1 bg-gradient-to-r from-indigo-400 via-purple-400 to-fuchsia-400 bg-clip-text text-transparent leading-normal tracking-tight">
           Image Investigation
         </h1>
-        <p className="text-gray-400 text-lg">
+        <p className="text-gray-400 text-lg font-light tracking-wide">
           Upload an image to analyze it with AI and search across multiple reverse image search engines
         </p>
       </div>
@@ -170,7 +170,7 @@ export default function HomePage() {
               setPreview(null);
               setError("");
             }}
-            className="w-full pl-10 pr-4 py-3 bg-gray-900 border border-gray-700 rounded-xl text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="w-full pl-10 pr-4 py-3 bg-gray-900 border border-gray-700 rounded-xl text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
           />
         </div>
       </div>
@@ -187,7 +187,7 @@ export default function HomePage() {
       <button
         onClick={handleSubmit}
         disabled={loading || (!file && !url)}
-        className="mt-6 w-full py-3 px-6 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
+        className="mt-6 w-full py-3 px-6 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-800 disabled:text-gray-500 text-white font-medium rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 hover:shadow-indigo-500/30"
       >
         {loading ? (
           <>
