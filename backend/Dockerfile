@@ -16,4 +16,7 @@ COPY shared/ /app/shared/
 
 ENV PYTHONPATH=/app
 
-CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+COPY backend/entrypoint.sh /app/backend/entrypoint.sh
+RUN chmod +x /app/backend/entrypoint.sh
+
+CMD ["/app/backend/entrypoint.sh"]

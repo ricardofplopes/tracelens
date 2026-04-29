@@ -22,6 +22,9 @@ async def get_db() -> AsyncSession:
 
 
 async def init_db():
-    async with engine.begin() as conn:
-        from backend.app.models import job, asset, feature, provider_run, candidate, report  # noqa
-        await conn.run_sync(Base.metadata.create_all)
+    """No-op: schema is managed by Alembic migrations.
+
+    Kept for backward compatibility with lifespan startup; the actual
+    migration is executed via ``alembic upgrade head`` in entrypoint.sh.
+    """
+    pass
