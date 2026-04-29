@@ -137,6 +137,7 @@ export default function JobPage() {
   const [filterType, setFilterType] = useState<string>("all");
   const [showFeatures, setShowFeatures] = useState(false);
   const [showReport, setShowReport] = useState(true);
+  const [progress, setProgress] = useState<{step: string; progress: number; total: number; message: string} | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -167,13 +168,40 @@ export default function JobPage() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(() => {
-      if (job?.status && !["complete", "failed"].includes(job.status)) {
-        fetchData();
+
+    // Set up SSE for live progress updates
+    const evtSource = new EventSource(`${API_BASE}/api/jobs/${jobId}/stream`);
+
+    evtSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.event === "progress") {
+          setProgress({ step: data.step, progress: data.progress, total: data.total, message: data.message });
+        } else if (data.event === "complete") {
+          setProgress(null);
+          fetchData();
+          evtSource.close();
+        } else if (data.event === "failed") {
+          setProgress(null);
+          fetchData();
+          evtSource.close();
+        }
+      } catch {
+        // Ignore parse errors
       }
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [fetchData, job?.status]);
+    };
+
+    evtSource.onerror = () => {
+      evtSource.close();
+      // Fall back to polling
+      const interval = setInterval(() => {
+        fetchData();
+      }, 3000);
+      return () => clearInterval(interval);
+    };
+
+    return () => evtSource.close();
+  }, [fetchData, jobId]);
 
   const currentStepIdx = STATUS_STEPS.findIndex((s) => s.key === job?.status);
   const isProcessing = job?.status && !["complete", "failed"].includes(job.status);
@@ -243,6 +271,21 @@ export default function JobPage() {
       {/* Progress Steps */}
       {isProcessing && (
         <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-6">
+          {progress && (
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-gray-300">{progress.message}</span>
+                <span className="text-sm text-gray-500">{progress.progress}/{progress.total}</span>
+              </div>
+              <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-500"
+                  style={{ width: `${(progress.progress / progress.total) * 100}%` }}
+                />
+              </div>
+              <p className="text-xs text-gray-500 mt-1 capitalize">{progress.step.replace('_', ' ')}</p>
+            </div>
+          )}
           <div className="flex items-center justify-between">
             {STATUS_STEPS.map((step, idx) => {
               const isActive = idx === currentStepIdx;
