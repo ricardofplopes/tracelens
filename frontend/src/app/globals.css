@@ -36,6 +36,32 @@ body {
   background: rgba(99, 102, 241, 0.5);
 }
 
+/* Light mode overrides */
+html.light {
+  --background: #f9fafb;
+  --foreground: #111827;
+}
+
+html.light body {
+  background: #f9fafb !important;
+  color: #111827;
+}
+
+html.light .bg-gray-950 { background-color: #f9fafb !important; }
+html.light .bg-gray-900\/50 { background-color: rgba(243, 244, 246, 0.8) !important; }
+html.light .bg-gray-900 { background-color: #f3f4f6 !important; }
+html.light .bg-gray-800 { background-color: #e5e7eb !important; }
+html.light .bg-gray-800\/50 { background-color: rgba(229, 231, 235, 0.5) !important; }
+html.light .text-gray-100 { color: #111827 !important; }
+html.light .text-gray-300 { color: #374151 !important; }
+html.light .text-gray-400 { color: #6b7280 !important; }
+html.light .text-gray-500 { color: #9ca3af !important; }
+html.light .border-gray-800 { border-color: #e5e7eb !important; }
+html.light .border-gray-800\/60 { border-color: rgba(229, 231, 235, 0.6) !important; }
+html.light .border-gray-700 { border-color: #d1d5db !important; }
+html.light nav { background-color: rgba(255, 255, 255, 0.8) !important; }
+html.light .placeholder-gray-500::placeholder { color: #9ca3af !important; }
+
 @layer utilities {
   .text-balance {
     text-wrap: balance;

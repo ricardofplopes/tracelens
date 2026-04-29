@@ -7,6 +7,7 @@ import os
 from backend.app.core.config import settings
 from backend.app.core.database import init_db
 from backend.app.core.logging import setup_logging
+from backend.app.core.rate_limit import RateLimitMiddleware
 from backend.app.api.routes import router
 
 
@@ -32,6 +33,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_middleware(RateLimitMiddleware)
 
 app.include_router(router)
 
