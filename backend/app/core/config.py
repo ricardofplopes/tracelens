@@ -31,6 +31,16 @@ class Settings(BaseSettings):
     
     # Playwright
     PLAYWRIGHT_TIMEOUT: int = 30000
+
+    # Rate limiting
+    RATE_LIMIT_UPLOADS: int = 10  # uploads per minute per IP
+    RATE_LIMIT_API: int = 60  # API calls per minute per IP
+
+    # Provider priority (higher = shown first, affects score weighting)
+    PROVIDER_PRIORITIES: str = "google_lens:10,yandex:9,saucenao:8,iqdb:7,wikimedia:6,web_search:5"
+
+    # Concurrency
+    MAX_CONCURRENT_PROVIDERS: int = 4
     
     model_config = {"env_file": ".env", "extra": "ignore"}
 

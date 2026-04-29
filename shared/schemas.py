@@ -108,6 +108,7 @@ class ProviderInfo(BaseModel):
     enabled: bool
     experimental: bool = False
     description: str = ""
+    priority: int = 5
 
 
 class ProviderTestResult(BaseModel):

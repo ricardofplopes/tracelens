@@ -10,6 +10,7 @@ interface ProviderInfo {
   enabled: boolean;
   experimental: boolean;
   description: string;
+  priority: number;
 }
 
 interface HealthStatus {
@@ -238,6 +239,9 @@ export default function SettingsPage() {
                       experimental
                     </span>
                   )}
+                  <span className="text-xs bg-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded">
+                    Priority: {p.priority}
+                  </span>
                 </div>
                 <p className="text-xs text-gray-500 mt-0.5">{p.description}</p>
                 {testResults[p.name] && (
