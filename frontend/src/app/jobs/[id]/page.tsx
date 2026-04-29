@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import {
   Loader2, CheckCircle, XCircle, Clock, Search,
-  ExternalLink, Filter, ChevronDown, ChevronUp, Eye
+  ExternalLink, Filter, ChevronDown, ChevronUp, Eye, Download
 } from "lucide-react";
 
 const API_BASE = "";
@@ -215,7 +215,29 @@ export default function JobPage() {
           <h1 className="text-2xl font-bold">Investigation</h1>
           <p className="text-sm text-gray-500 mt-1 font-mono">{job.id}</p>
         </div>
-        <StatusBadge status={job.status} />
+        <div className="flex items-center gap-3">
+          {job.status === "complete" && (
+            <>
+              <a
+                href={`/api/jobs/${jobId}/export?format=json`}
+                download
+                className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-gray-300 flex items-center gap-1.5 transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                JSON
+              </a>
+              <a
+                href={`/api/jobs/${jobId}/export?format=html`}
+                download
+                className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-gray-300 flex items-center gap-1.5 transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Report
+              </a>
+            </>
+          )}
+          <StatusBadge status={job.status} />
+        </div>
       </div>
 
       {/* Progress Steps */}
