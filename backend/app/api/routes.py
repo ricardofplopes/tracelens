@@ -1,9 +1,11 @@
 import uuid
 import os
+import json
 import shutil
+import asyncio
 from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -306,14 +308,19 @@ async def export_job(job_id: uuid.UUID, format: str = "json", db: AsyncSession =
 
 @router.get("/providers", response_model=list[ProviderInfo])
 async def list_providers():
+    from backend.app.services.provider_priority import get_provider_priorities
+
+    priorities = get_provider_priorities(settings)
     providers = [
-        ProviderInfo(name="iqdb", enabled=settings.IQDB_ENABLED, description="IQDB anime/artwork reverse search"),
-        ProviderInfo(name="saucenao", enabled=settings.SAUCENAO_ENABLED, description="SauceNAO reverse image search"),
-        ProviderInfo(name="wikimedia", enabled=settings.WIKIMEDIA_ENABLED, description="Wikimedia Commons search"),
-        ProviderInfo(name="google_lens", enabled=settings.GOOGLE_LENS_ENABLED, experimental=True, description="[Experimental] Google Lens via browser automation"),
-        ProviderInfo(name="yandex", enabled=settings.YANDEX_ENABLED, experimental=True, description="[Experimental] Yandex Images via browser automation"),
-        ProviderInfo(name="web_search", enabled=settings.WEB_SEARCH_ENABLED, description="Generic web search using OCR + AI terms"),
+        ProviderInfo(name="iqdb", enabled=settings.IQDB_ENABLED, description="IQDB anime/artwork reverse search", priority=priorities.get("iqdb", 5)),
+        ProviderInfo(name="saucenao", enabled=settings.SAUCENAO_ENABLED, description="SauceNAO reverse image search", priority=priorities.get("saucenao", 5)),
+        ProviderInfo(name="wikimedia", enabled=settings.WIKIMEDIA_ENABLED, description="Wikimedia Commons search", priority=priorities.get("wikimedia", 5)),
+        ProviderInfo(name="google_lens", enabled=settings.GOOGLE_LENS_ENABLED, experimental=True, description="[Experimental] Google Lens via browser automation", priority=priorities.get("google_lens", 5)),
+        ProviderInfo(name="yandex", enabled=settings.YANDEX_ENABLED, experimental=True, description="[Experimental] Yandex Images via browser automation", priority=priorities.get("yandex", 5)),
+        ProviderInfo(name="web_search", enabled=settings.WEB_SEARCH_ENABLED, description="Generic web search using OCR + AI terms", priority=priorities.get("web_search", 5)),
     ]
+    # Sort by priority descending
+    providers.sort(key=lambda x: x.priority, reverse=True)
     return providers
 
 
@@ -427,3 +434,48 @@ async def system_info():
             "total_size_mb": round(upload_size / (1024**2), 1),
         },
     }
+
+
+@router.get("/jobs/{job_id}/stream")
+async def stream_job_progress(job_id: uuid.UUID):
+    """Stream job progress via SSE."""
+    import redis.asyncio as aioredis
+
+    async def event_generator():
+        r = aioredis.from_url(settings.REDIS_URL)
+        pubsub = r.pubsub()
+        channel = f"job:{job_id}:progress"
+        await pubsub.subscribe(channel)
+
+        try:
+            # Send initial connection event
+            yield f"data: {json.dumps({'event': 'connected', 'job_id': str(job_id)})}\n\n"
+
+            while True:
+                message = await asyncio.wait_for(
+                    pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0),
+                    timeout=30.0,
+                )
+                if message and message["type"] == "message":
+                    yield f"data: {message['data'].decode()}\n\n"
+                    data = json.loads(message['data'])
+                    if data.get("event") in ("complete", "failed"):
+                        break
+                else:
+                    # Send keepalive
+                    yield f": keepalive\n\n"
+        except asyncio.TimeoutError:
+            yield f"data: {json.dumps({'event': 'timeout'})}\n\n"
+        finally:
+            await pubsub.unsubscribe(channel)
+            await r.close()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

@@ -1,12 +1,14 @@
 import os
 import uuid
 import asyncio
+import json
 from datetime import datetime
 
 from celery import shared_task
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 import structlog
+import redis as sync_redis
 
 from backend.app.core.config import settings
 from backend.app.models.job import Job
@@ -37,6 +39,65 @@ def get_session() -> Session:
     return SessionLocal()
 
 
+def publish_progress(job_id: str, step: str, progress: int, total: int = 10, message: str = ""):
+    """Publish progress event to Redis pubsub."""
+    try:
+        r = sync_redis.from_url(settings.REDIS_URL)
+        event = {
+            "event": "progress",
+            "job_id": job_id,
+            "step": step,
+            "progress": progress,
+            "total": total,
+            "message": message,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+        r.publish(f"job:{job_id}:progress", json.dumps(event))
+        r.close()
+    except Exception:
+        pass  # Non-critical, don't break pipeline
+
+
+def clone_results(session: Session, source_job_id: uuid.UUID, target_job_id: uuid.UUID):
+    """Clone search results from a completed job to a new one."""
+    # Copy candidates
+    source_candidates = session.query(CandidateResult).filter(
+        CandidateResult.job_id == source_job_id
+    ).all()
+    for c in source_candidates:
+        new_candidate = CandidateResult(
+            job_id=target_job_id,
+            provider_run_id=c.provider_run_id,
+            source_url=c.source_url,
+            page_title=c.page_title,
+            thumbnail_url=c.thumbnail_url,
+            match_type=c.match_type,
+            similarity_score=c.similarity_score,
+            confidence=c.confidence,
+            extracted_text=c.extracted_text,
+            extra_data=c.extra_data,
+        )
+        session.add(new_candidate)
+
+    # Copy report
+    source_report = session.query(FinalReport).filter(
+        FinalReport.job_id == source_job_id
+    ).first()
+    if source_report:
+        new_report = FinalReport(
+            job_id=target_job_id,
+            summary=source_report.summary,
+            ai_description=source_report.ai_description,
+            entities=source_report.entities,
+            search_terms=source_report.search_terms,
+            cluster_count=source_report.cluster_count,
+            top_matches=source_report.top_matches,
+        )
+        session.add(new_report)
+
+    session.commit()
+
+
 def update_job_status(session: Session, job_id: str, status: str, error: str = None):
     job = session.query(Job).filter(Job.id == uuid.UUID(job_id)).first()
     if job:
@@ -55,38 +116,86 @@ def run_pipeline(job_id: str):
 
     try:
         # Step 1: Ingest
+        publish_progress(job_id, "ingestion", 1, 10, "Processing image...")
         update_job_status(session, job_id, "ingesting")
         ingest_image(session, job_id)
 
         # Step 2: Extract features
+        publish_progress(job_id, "features", 2, 10, "Extracting features...")
         update_job_status(session, job_id, "extracting")
         extract_features(session, job_id)
 
+        # Cache check: look for existing completed job with same image hash
+        feature = session.query(ExtractedFeature).filter(
+            ExtractedFeature.job_id == uuid.UUID(job_id)
+        ).first()
+        if feature and feature.sha256:
+            existing = session.query(ExtractedFeature).filter(
+                ExtractedFeature.sha256 == feature.sha256,
+                ExtractedFeature.job_id != uuid.UUID(job_id),
+            ).first()
+            if existing:
+                existing_job = session.query(Job).filter(
+                    Job.id == existing.job_id,
+                    Job.status == "complete",
+                ).first()
+                if existing_job:
+                    logger.info("cache_hit", existing_job_id=str(existing_job.id), hash=feature.sha256)
+                    clone_results(session, existing_job.id, uuid.UUID(job_id))
+                    job = session.query(Job).filter(Job.id == uuid.UUID(job_id)).first()
+                    job.status = "complete"
+                    job.completed_at = datetime.utcnow()
+                    session.commit()
+                    try:
+                        r = sync_redis.from_url(settings.REDIS_URL)
+                        r.publish(f"job:{job_id}:progress", json.dumps({"event": "complete", "job_id": job_id}))
+                        r.close()
+                    except Exception:
+                        pass
+                    return {"status": "complete", "cached_from": str(existing_job.id)}
+
         # Step 3: Ollama analysis
+        publish_progress(job_id, "vision", 4, 10, "Running AI analysis...")
         update_job_status(session, job_id, "analyzing")
         analysis = run_ollama_analysis(session, job_id)
 
         # Step 4: Build search terms
+        publish_progress(job_id, "terms", 5, 10, "Generating search terms...")
         update_job_status(session, job_id, "searching")
         search_terms = build_search_terms(session, job_id, analysis)
 
         # Step 5: Run providers
+        publish_progress(job_id, "search", 6, 10, "Searching providers...")
         run_providers(session, job_id, analysis, search_terms)
 
         # Step 6: Score and rank
+        publish_progress(job_id, "scoring", 8, 10, "Scoring results...")
         update_job_status(session, job_id, "scoring")
         score_and_rank(session, job_id)
 
         # Step 7: Generate report
+        publish_progress(job_id, "report", 9, 10, "Generating report...")
         update_job_status(session, job_id, "reporting")
         generate_report(session, job_id, analysis)
 
         update_job_status(session, job_id, "complete")
+        try:
+            r = sync_redis.from_url(settings.REDIS_URL)
+            r.publish(f"job:{job_id}:progress", json.dumps({"event": "complete", "job_id": job_id}))
+            r.close()
+        except Exception:
+            pass
         logger.info("pipeline_complete", job_id=job_id)
 
     except Exception as e:
         logger.error("pipeline_failed", job_id=job_id, error=str(e))
         update_job_status(session, job_id, "failed", error=str(e))
+        try:
+            r = sync_redis.from_url(settings.REDIS_URL)
+            r.publish(f"job:{job_id}:progress", json.dumps({"event": "failed", "job_id": job_id, "error": str(e)}))
+            r.close()
+        except Exception:
+            pass
     finally:
         session.close()
 
@@ -255,24 +364,50 @@ def run_providers(session: Session, job_id: str, analysis: dict, search_terms: l
     enabled = get_enabled_providers(settings)
     logger.info("running_providers", count=len(enabled), names=[p.name for p in enabled])
 
-    for provider in enabled:
+    async def run_all():
+        sem = asyncio.Semaphore(settings.MAX_CONCURRENT_PROVIDERS)
+
+        async def run_one(provider):
+            async with sem:
+                timeout = 180 if provider.experimental else 120
+                try:
+                    results = await asyncio.wait_for(
+                        provider.safe_search(original.file_path, context),
+                        timeout=timeout,
+                    )
+                    return (provider.name, results, None)
+                except asyncio.TimeoutError:
+                    logger.error("provider_timeout", provider=provider.name, timeout=timeout)
+                    return (provider.name, None, f"Timed out after {timeout}s")
+                except Exception as e:
+                    logger.error("provider_failed", provider=provider.name, error=str(e))
+                    return (provider.name, None, str(e))
+
+        return await asyncio.gather(*[run_one(p) for p in enabled])
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        results_list = loop.run_until_complete(run_all())
+    finally:
+        loop.close()
+
+    # Save all results to DB sequentially (SQLAlchemy sessions are not thread-safe)
+    for provider_name, results, error in results_list:
         provider_run = ProviderRun(
             job_id=uuid.UUID(job_id),
-            provider_name=provider.name,
+            provider_name=provider_name,
             status="running",
             started_at=datetime.utcnow(),
         )
         session.add(provider_run)
         session.flush()
 
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            results = loop.run_until_complete(
-                provider.safe_search(original.file_path, context)
-            )
-            loop.close()
-
+        if error is not None:
+            provider_run.status = "failed"
+            provider_run.finished_at = datetime.utcnow()
+            provider_run.error_message = error
+        else:
             provider_run.status = "success"
             provider_run.finished_at = datetime.utcnow()
             provider_run.result_count = len(results)
@@ -291,12 +426,6 @@ def run_providers(session: Session, job_id: str, analysis: dict, search_terms: l
                     extra_data=r.metadata,
                 )
                 session.add(candidate)
-
-        except Exception as e:
-            provider_run.status = "failed"
-            provider_run.finished_at = datetime.utcnow()
-            provider_run.error_message = str(e)
-            logger.error("provider_failed", provider=provider.name, error=str(e))
 
         session.commit()
 
@@ -323,6 +452,9 @@ def score_and_rank(session: Session, job_id: str):
         CandidateResult.job_id == uuid.UUID(job_id)
     ).all()
 
+    from backend.app.services.provider_priority import get_provider_priorities, get_confidence_weight
+    priorities = get_provider_priorities(settings)
+
     for candidate in candidates:
         provider_run = session.query(ProviderRun).filter(
             ProviderRun.id == candidate.provider_run_id
@@ -338,7 +470,8 @@ def score_and_rank(session: Session, job_id: str):
         }
 
         confidence = score_candidate(candidate_dict, features_dict, provider_name)
-        candidate.confidence = confidence
+        weight = get_confidence_weight(provider_name, priorities)
+        candidate.confidence = min(1.0, (confidence or 0.5) * weight)
 
     session.commit()
     logger.info("scoring_complete", job_id=job_id, candidate_count=len(candidates))
@@ -414,3 +547,176 @@ def generate_report(session: Session, job_id: str, analysis: dict):
     session.add(report)
     session.commit()
     logger.info("report_generated", job_id=job_id, clusters=len(clusters))
+
+
+@shared_task(name="worker.tasks.retry_providers", bind=True, soft_time_limit=1800)
+def retry_providers(self, job_id: str, provider_names: list[str] | None = None):
+    """Re-run specific providers for an existing job without repeating the full pipeline."""
+    logger.info("retry_start", job_id=job_id, providers=provider_names)
+    session = get_session()
+
+    try:
+        job = session.query(Job).filter(Job.id == uuid.UUID(job_id)).first()
+        if not job:
+            logger.error("retry_job_not_found", job_id=job_id)
+            return
+
+        job.status = "processing"
+        job.updated_at = datetime.utcnow()
+        session.commit()
+
+        # Get the primary asset path
+        original = session.query(Asset).filter(
+            Asset.job_id == uuid.UUID(job_id),
+            Asset.variant == "original",
+        ).first()
+        if not original:
+            update_job_status(session, job_id, "failed", error="No original asset found")
+            return
+
+        # Get features for context
+        feature = session.query(ExtractedFeature).filter(
+            ExtractedFeature.job_id == uuid.UUID(job_id)
+        ).first()
+
+        # Get existing report for search terms and entities
+        report = session.query(FinalReport).filter(
+            FinalReport.job_id == uuid.UUID(job_id)
+        ).first()
+
+        # Reconstruct analysis context from stored data
+        search_terms = []
+        entities = []
+        brands = []
+        landmarks = []
+
+        if report:
+            if report.search_terms and isinstance(report.search_terms, dict):
+                search_terms = report.search_terms.get("terms", [])
+            if report.entities and isinstance(report.entities, dict):
+                entities = report.entities.get("entities", [])
+                brands = report.entities.get("brands", [])
+                landmarks = report.entities.get("landmarks", [])
+
+        context = {
+            "search_terms": search_terms,
+            "entities": entities,
+            "brands": brands,
+            "landmarks": landmarks,
+            "ocr_text": feature.ocr_text if feature else "",
+            "saucenao_api_key": settings.SAUCENAO_API_KEY or "",
+        }
+
+        # Get enabled providers, filter to requested ones
+        from providers import get_enabled_providers
+        all_enabled = get_enabled_providers(settings)
+
+        if provider_names:
+            providers_to_run = [p for p in all_enabled if p.name in provider_names]
+        else:
+            # Retry all previously failed providers
+            failed_runs = session.query(ProviderRun).filter(
+                ProviderRun.job_id == uuid.UUID(job_id),
+                ProviderRun.status == "failed",
+            ).all()
+            failed_names = {r.provider_name for r in failed_runs}
+            providers_to_run = [p for p in all_enabled if p.name in failed_names]
+
+        if not providers_to_run:
+            update_job_status(session, job_id, "complete")
+            logger.info("retry_no_providers", job_id=job_id)
+            return
+
+        # Delete old runs and candidates for these providers
+        provider_names_to_run = [p.name for p in providers_to_run]
+        old_runs = session.query(ProviderRun).filter(
+            ProviderRun.job_id == uuid.UUID(job_id),
+            ProviderRun.provider_name.in_(provider_names_to_run),
+        ).all()
+        old_run_ids = [r.id for r in old_runs]
+
+        if old_run_ids:
+            session.query(CandidateResult).filter(
+                CandidateResult.provider_run_id.in_(old_run_ids),
+            ).delete(synchronize_session="fetch")
+            session.query(ProviderRun).filter(
+                ProviderRun.id.in_(old_run_ids),
+            ).delete(synchronize_session="fetch")
+        session.commit()
+
+        # Run providers using the same parallel pattern as run_providers()
+        async def run_all():
+            sem = asyncio.Semaphore(settings.MAX_CONCURRENT_PROVIDERS)
+
+            async def run_one(provider):
+                async with sem:
+                    timeout = 180 if provider.experimental else 120
+                    try:
+                        results = await asyncio.wait_for(
+                            provider.safe_search(original.file_path, context),
+                            timeout=timeout,
+                        )
+                        return (provider.name, results, None)
+                    except asyncio.TimeoutError:
+                        return (provider.name, None, f"Timed out after {timeout}s")
+                    except Exception as e:
+                        return (provider.name, None, str(e))
+
+            return await asyncio.gather(*[run_one(p) for p in providers_to_run])
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            results_list = loop.run_until_complete(run_all())
+        finally:
+            loop.close()
+
+        # Save new results
+        for provider_name, results, error in results_list:
+            provider_run = ProviderRun(
+                job_id=uuid.UUID(job_id),
+                provider_name=provider_name,
+                status="running",
+                started_at=datetime.utcnow(),
+            )
+            session.add(provider_run)
+            session.flush()
+
+            if error is not None:
+                provider_run.status = "failed"
+                provider_run.finished_at = datetime.utcnow()
+                provider_run.error_message = error
+            else:
+                provider_run.status = "success"
+                provider_run.finished_at = datetime.utcnow()
+                provider_run.result_count = len(results)
+
+                for r in results:
+                    candidate = CandidateResult(
+                        job_id=uuid.UUID(job_id),
+                        provider_run_id=provider_run.id,
+                        source_url=r.source_url,
+                        page_title=r.page_title,
+                        thumbnail_url=r.thumbnail_url,
+                        match_type=r.match_type,
+                        similarity_score=r.similarity_score,
+                        confidence=r.confidence,
+                        extracted_text=r.extracted_text,
+                        extra_data=r.metadata,
+                    )
+                    session.add(candidate)
+
+            session.commit()
+
+        # Re-score all candidates
+        score_and_rank(session, job_id)
+
+        update_job_status(session, job_id, "complete")
+        logger.info("retry_complete", job_id=job_id)
+
+    except Exception as e:
+        logger.error("retry_failed", job_id=job_id, error=str(e))
+        session.rollback()
+        update_job_status(session, job_id, "failed", error=f"Retry failed: {str(e)}")
+    finally:
+        session.close()
