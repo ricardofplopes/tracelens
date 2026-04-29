@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
+import { ThemeProvider } from "../components/ThemeProvider";
+import { ThemeToggle } from "../components/ThemeToggle";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -52,37 +54,46 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`dark ${inter.variable}`}>
+    <html lang="en" className={inter.variable} suppressHydrationWarning>
       <body className="min-h-screen bg-gray-950 text-gray-100 font-sans antialiased">
-        <nav className="border-b border-gray-800/60 bg-gray-950/80 backdrop-blur-xl sticky top-0 z-50">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between h-16">
-              <a href="/" className="flex items-center gap-2.5 group">
-                <TraceLensLogo className="w-7 h-7 transition-transform group-hover:scale-110" />
-                <span className="text-lg font-semibold tracking-tight bg-gradient-to-r from-indigo-400 via-purple-400 to-fuchsia-400 bg-clip-text text-transparent">
-                  TraceLens
-                </span>
-              </a>
-              <div className="flex items-center gap-1">
-                <a
-                  href="/"
-                  className="px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-white/5 rounded-lg transition-all"
-                >
-                  New Investigation
+        <ThemeProvider>
+          <nav className="border-b border-gray-800/60 bg-gray-950/80 backdrop-blur-xl sticky top-0 z-50">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+              <div className="flex items-center justify-between h-16">
+                <a href="/" className="flex items-center gap-2.5 group">
+                  <TraceLensLogo className="w-7 h-7 transition-transform group-hover:scale-110" />
+                  <span className="text-lg font-semibold tracking-tight bg-gradient-to-r from-indigo-400 via-purple-400 to-fuchsia-400 bg-clip-text text-transparent">
+                    TraceLens
+                  </span>
                 </a>
-                <a
-                  href="/settings"
-                  className="px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-white/5 rounded-lg transition-all"
-                >
-                  Settings
-                </a>
+                <div className="flex items-center gap-1">
+                  <a
+                    href="/"
+                    className="px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-white/5 rounded-lg transition-all"
+                  >
+                    New Investigation
+                  </a>
+                  <a
+                    href="/jobs"
+                    className="px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-white/5 rounded-lg transition-all"
+                  >
+                    History
+                  </a>
+                  <a
+                    href="/settings"
+                    className="px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-white/5 rounded-lg transition-all"
+                  >
+                    Settings
+                  </a>
+                  <ThemeToggle />
+                </div>
               </div>
             </div>
-          </div>
-        </nav>
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          {children}
-        </main>
+          </nav>
+          <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            {children}
+          </main>
+        </ThemeProvider>
       </body>
     </html>
   );

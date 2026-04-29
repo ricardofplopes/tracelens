@@ -225,7 +225,7 @@ export default function SettingsPage() {
         </div>
 
         <div className="space-y-3">
-          {providers.map((p) => (
+          {sortedProviders.map((p) => (
             <div
               key={p.name}
               className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg"
@@ -241,13 +241,26 @@ export default function SettingsPage() {
                 </div>
                 <p className="text-xs text-gray-500 mt-0.5">{p.description}</p>
                 {testResults[p.name] && (
-                  <div className="flex items-center gap-1 mt-1">
+                  <div className="flex items-center gap-2 mt-1">
                     {testResults[p.name].healthy ? (
                       <CheckCircle className="w-3 h-3 text-green-400" />
                     ) : (
                       <XCircle className="w-3 h-3 text-red-400" />
                     )}
                     <span className="text-xs text-gray-500">{testResults[p.name].message}</span>
+                    {testResults[p.name].latency_ms != null && (
+                      <span
+                        className={`text-xs font-mono ${
+                          testResults[p.name].latency_ms! < 500
+                            ? "text-green-400"
+                            : testResults[p.name].latency_ms! < 2000
+                              ? "text-yellow-400"
+                              : "text-red-400"
+                        }`}
+                      >
+                        {testResults[p.name].latency_ms}ms
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
