@@ -2,16 +2,20 @@ import uuid
 import os
 import shutil
 from datetime import datetime
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Request
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 import httpx
 import structlog
 
+from pydantic import BaseModel as PydanticBaseModel
+
 from backend.app.core.database import get_db
 from backend.app.core.config import settings
 from backend.app.models import Job, Asset, ExtractedFeature, ProviderRun, CandidateResult, FinalReport
+from backend.app.services.validation import validate_image, strip_gps_exif, get_mime_from_magic
 from shared.schemas import (
     JobCreate, JobResponse, JobDetailResponse, JobResultsResponse,
     AssetResponse, FeatureResponse, ProviderRunResponse, CandidateResultResponse,
@@ -55,12 +59,18 @@ async def health_check(db: AsyncSession = Depends(get_db)):
 
 @router.post("/jobs", response_model=JobResponse)
 async def create_job(
+    request: Request,
     file: UploadFile | None = File(None),
     source_url: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     if not file and not source_url:
         raise HTTPException(status_code=400, detail="Provide either a file upload or source_url")
+
+    # Early Content-Length check before buffering
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+        raise HTTPException(status_code=400, detail=f"Upload exceeds maximum size of {settings.MAX_UPLOAD_SIZE_MB} MB")
 
     job_id = uuid.uuid4()
     job_dir = os.path.join(settings.UPLOAD_DIR, str(job_id))
@@ -94,6 +104,15 @@ async def create_job(
                     f.write(resp.content)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to download image: {str(e)}")
+
+    # Validate the saved image file
+    if file_path:
+        is_valid, error_msg = validate_image(file_path, max_size_mb=settings.MAX_UPLOAD_SIZE_MB)
+        if not is_valid:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            logger.warning("upload_validation_failed", error=error_msg)
+            raise HTTPException(status_code=400, detail=f"Invalid image: {error_msg}")
+        strip_gps_exif(file_path)
 
     job = Job(
         id=job_id,
@@ -141,6 +160,49 @@ async def create_job(
     await db.commit()
     await db.refresh(job)
     return job
+
+
+@router.get("/jobs")
+async def list_jobs(
+    page: int = 1,
+    limit: int = 20,
+    status: str | None = None,
+    image_hash: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """List all jobs with pagination."""
+    query = select(Job).order_by(Job.created_at.desc())
+    if status:
+        query = query.where(Job.status == status)
+    if image_hash:
+        query = query.join(ExtractedFeature, ExtractedFeature.job_id == Job.id).where(
+            ExtractedFeature.sha256 == image_hash
+        )
+
+    # Count total
+    from sqlalchemy import func
+    count_query = select(func.count()).select_from(Job)
+    if status:
+        count_query = count_query.where(Job.status == status)
+    if image_hash:
+        count_query = count_query.join(ExtractedFeature, ExtractedFeature.job_id == Job.id).where(
+            ExtractedFeature.sha256 == image_hash
+        )
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
+    # Paginate
+    offset = (page - 1) * limit
+    query = query.offset(offset).limit(limit)
+    result = await db.execute(query.options(selectinload(Job.assets)))
+    jobs = result.scalars().all()
+
+    return {
+        "jobs": [JobResponse.model_validate(j) for j in jobs],
+        "total": total,
+        "page": page,
+        "pages": (total + limit - 1) // limit,
+    }
 
 
 @router.get("/jobs/{job_id}", response_model=JobDetailResponse)
@@ -203,6 +265,45 @@ async def get_job_results(job_id: uuid.UUID, db: AsyncSession = Depends(get_db))
     )
 
 
+@router.get("/jobs/{job_id}/export")
+async def export_job(job_id: uuid.UUID, format: str = "json", db: AsyncSession = Depends(get_db)):
+    """Export job results as JSON or HTML report."""
+    from backend.app.services.export import export_json, export_html_report
+
+    result = await db.execute(
+        select(Job)
+        .options(
+            selectinload(Job.features),
+            selectinload(Job.candidates),
+            selectinload(Job.report),
+        )
+        .where(Job.id == job_id)
+    )
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    features = job.features[0] if job.features else None
+    candidates = sorted(job.candidates, key=lambda c: c.confidence or 0, reverse=True)
+
+    if format == "json":
+        content = export_json(job, features, candidates, job.report)
+        return Response(
+            content=content,
+            media_type="application/json",
+            headers={"Content-Disposition": f"attachment; filename=tracelens-{job_id}.json"}
+        )
+    elif format in ("html", "pdf"):
+        html = export_html_report(job, features, candidates, job.report)
+        return Response(
+            content=html,
+            media_type="text/html",
+            headers={"Content-Disposition": f"attachment; filename=tracelens-{job_id}.html"}
+        )
+    else:
+        raise HTTPException(status_code=400, detail="Format must be 'json' or 'html'")
+
+
 @router.get("/providers", response_model=list[ProviderInfo])
 async def list_providers():
     providers = [
@@ -216,23 +317,113 @@ async def list_providers():
     return providers
 
 
+@router.get("/ollama/models")
+async def list_ollama_models():
+    """Proxy Ollama's model list."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{settings.OLLAMA_HOST}/api/tags")
+            resp.raise_for_status()
+            data = resp.json()
+            models = []
+            for m in data.get("models", []):
+                models.append({
+                    "name": m.get("name", ""),
+                    "size": m.get("size", 0),
+                    "modified_at": m.get("modified_at", ""),
+                    "details": m.get("details", {}),
+                })
+            return {
+                "models": models,
+                "current_vision_model": settings.OLLAMA_VISION_MODEL,
+                "current_text_model": settings.OLLAMA_TEXT_MODEL,
+            }
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Cannot reach Ollama: {str(e)}")
+
+
 @router.post("/providers/test", response_model=list[ProviderTestResult])
 async def test_providers():
     from providers import get_all_providers
+    import time
     results = []
     for provider in get_all_providers(settings):
         try:
+            start = time.time()
             health = await provider.healthcheck()
+            latency_ms = round((time.time() - start) * 1000)
             results.append(ProviderTestResult(
                 name=provider.name,
                 healthy=health.get("healthy", False),
                 message=health.get("message", ""),
-                latency_ms=health.get("latency_ms"),
+                latency_ms=latency_ms,
             ))
         except Exception as e:
             results.append(ProviderTestResult(
                 name=provider.name,
                 healthy=False,
                 message=str(e),
+                latency_ms=None,
             ))
     return results
+
+
+class RetryRequest(PydanticBaseModel):
+    providers: list[str] | None = None  # If None, retry all failed providers
+
+
+@router.post("/jobs/{job_id}/retry")
+async def retry_job_providers(job_id: uuid.UUID, body: RetryRequest, db: AsyncSession = Depends(get_db)):
+    """Re-run specific or all failed providers for a job."""
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status not in ("complete", "failed"):
+        raise HTTPException(status_code=400, detail="Can only retry completed or failed jobs")
+
+    # Update job status
+    job.status = "retrying"
+    await db.commit()
+
+    # Dispatch retry task
+    from celery import Celery
+    celery_app = Celery(broker=settings.CELERY_BROKER_URL)
+    celery_app.send_task(
+        "worker.tasks.retry_providers",
+        args=[str(job_id), body.providers],
+    )
+
+    return {"status": "retrying", "job_id": str(job_id), "providers": body.providers}
+
+
+@router.get("/system/info")
+async def system_info():
+    """Get system resource information."""
+    upload_dir = settings.UPLOAD_DIR
+    try:
+        usage = shutil.disk_usage(upload_dir)
+        disk_info = {
+            "total_gb": round(usage.total / (1024**3), 1),
+            "used_gb": round(usage.used / (1024**3), 1),
+            "free_gb": round(usage.free / (1024**3), 1),
+            "usage_percent": round(usage.used / usage.total * 100, 1),
+        }
+    except Exception:
+        disk_info = None
+
+    upload_count = 0
+    upload_size = 0
+    if os.path.exists(upload_dir):
+        for root, dirs, files in os.walk(upload_dir):
+            upload_count += len(files)
+            upload_size += sum(os.path.getsize(os.path.join(root, f)) for f in files)
+
+    return {
+        "disk": disk_info,
+        "uploads": {
+            "file_count": upload_count,
+            "total_size_mb": round(upload_size / (1024**2), 1),
+        },
+    }
