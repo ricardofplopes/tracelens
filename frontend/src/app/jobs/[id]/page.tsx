@@ -286,31 +286,38 @@ export default function JobPage() {
               <p className="text-xs text-gray-500 mt-1 capitalize">{progress.step.replace('_', ' ')}</p>
             </div>
           )}
-          <div className="flex items-center justify-between">
+          <div className="flex items-start">
             {STATUS_STEPS.map((step, idx) => {
               const isActive = idx === currentStepIdx;
               const isDone = idx < currentStepIdx;
               return (
-                <div key={step.key} className="flex items-center">
-                  <div className="flex flex-col items-center">
-                    <div
-                      className={`w-8 h-8 rounded-full flex items-center justify-center text-sm
-                        ${isDone ? "bg-green-600 text-white" : ""}
-                        ${isActive ? "bg-blue-600 text-white animate-pulse" : ""}
-                        ${!isDone && !isActive ? "bg-gray-800 text-gray-500" : ""}
-                      `}
-                    >
-                      {isDone ? <CheckCircle className="w-4 h-4" /> : idx + 1}
-                    </div>
-                    <span
-                      className={`text-xs mt-1 ${isActive ? "text-blue-400" : isDone ? "text-green-400" : "text-gray-600"}`}
-                    >
-                      {step.label}
-                    </span>
-                  </div>
+                <div key={step.key} className="flex-1 flex flex-col items-center relative">
+                  {/* Connector line */}
                   {idx < STATUS_STEPS.length - 1 && (
-                    <div className={`w-8 h-0.5 mx-1 ${isDone ? "bg-green-600" : "bg-gray-800"}`} />
+                    <div
+                      className={`absolute top-4 left-[calc(50%+16px)] right-[calc(-50%+16px)] h-0.5 ${
+                        isDone ? "bg-green-600" : "bg-gray-700"
+                      }`}
+                    />
                   )}
+                  {/* Circle */}
+                  <div
+                    className={`relative z-10 w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium
+                      ${isDone ? "bg-green-600 text-white" : ""}
+                      ${isActive ? "bg-blue-600 text-white ring-4 ring-blue-600/20" : ""}
+                      ${!isDone && !isActive ? "bg-gray-800 text-gray-500 border border-gray-700" : ""}
+                    `}
+                  >
+                    {isDone ? <CheckCircle className="w-4 h-4" /> : idx + 1}
+                  </div>
+                  {/* Label */}
+                  <span
+                    className={`text-[11px] mt-2 text-center leading-tight ${
+                      isActive ? "text-blue-400 font-medium" : isDone ? "text-green-400" : "text-gray-500"
+                    }`}
+                  >
+                    {step.label}
+                  </span>
                 </div>
               );
             })}
