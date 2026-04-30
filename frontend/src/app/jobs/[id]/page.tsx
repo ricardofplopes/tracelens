@@ -84,6 +84,13 @@ function getAssetUrl(filePath: string): string {
   return `${API_BASE}${relative}`;
 }
 
+function formatElapsed(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}m ${s}s`;
+}
+
 function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
     pending: "bg-yellow-900/50 text-yellow-300 border-yellow-700",
@@ -138,6 +145,8 @@ export default function JobPage() {
   const [showFeatures, setShowFeatures] = useState(false);
   const [showReport, setShowReport] = useState(true);
   const [progress, setProgress] = useState<{step: string; progress: number; total: number; message: string} | null>(null);
+  const [stepStartTime, setStepStartTime] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
 
   const fetchData = useCallback(async () => {
     try {
@@ -168,6 +177,8 @@ export default function JobPage() {
 
   useEffect(() => {
     fetchData();
+    // Start elapsed timer from page load for in-progress jobs
+    setStepStartTime(Date.now());
 
     // Set up SSE for live progress updates
     const evtSource = new EventSource(`${API_BASE}/api/jobs/${jobId}/stream`);
@@ -176,9 +187,17 @@ export default function JobPage() {
       try {
         const data = JSON.parse(event.data);
         if (data.event === "progress") {
-          setProgress({ step: data.step, progress: data.progress, total: data.total, message: data.message });
+          setProgress((prev) => {
+            if (!prev || prev.step !== data.step) {
+              setStepStartTime(Date.now());
+              setElapsed(0);
+            }
+            return { step: data.step, progress: data.progress, total: data.total, message: data.message };
+          });
         } else if (data.event === "complete" || data.event === "failed") {
           setProgress(null);
+          setStepStartTime(null);
+          setElapsed(0);
           fetchData();
           evtSource.close();
         }
@@ -193,6 +212,15 @@ export default function JobPage() {
 
     return () => evtSource.close();
   }, [fetchData, jobId]);
+
+  // Elapsed timer for active step
+  useEffect(() => {
+    if (!stepStartTime || !isProcessing) return;
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - stepStartTime) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  });
 
   const currentStepIdx = STATUS_STEPS.findIndex((s) => s.key === job?.status);
   const isProcessing = job?.status && !["complete", "failed"].includes(job.status);
@@ -262,46 +290,87 @@ export default function JobPage() {
       {/* Progress Steps */}
       {isProcessing && (
         <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-6">
+          {/* CSS animations */}
+          <style jsx>{`
+            @keyframes pulse-glow {
+              0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.5); }
+              50% { box-shadow: 0 0 16px 4px rgba(59, 130, 246, 0.35); }
+            }
+            @keyframes shimmer {
+              0% { background-position: -200% 0; }
+              100% { background-position: 200% 0; }
+            }
+            @keyframes flow {
+              0% { background-position: 0% 0; }
+              100% { background-position: 200% 0; }
+            }
+            .step-pulse {
+              animation: pulse-glow 2s ease-in-out infinite;
+            }
+            .bar-shimmer {
+              background: linear-gradient(90deg, #6366f1 0%, #a78bfa 30%, #818cf8 50%, #a78bfa 70%, #6366f1 100%);
+              background-size: 200% 100%;
+              animation: shimmer 2s linear infinite;
+            }
+            .connector-flow {
+              background: linear-gradient(90deg, #16a34a 0%, #3b82f6 50%, #16a34a 100%);
+              background-size: 200% 100%;
+              animation: flow 1.5s linear infinite;
+            }
+          `}</style>
           {progress && (
             <div className="mb-4">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm text-gray-300">{progress.message}</span>
-                <span className="text-sm text-gray-500">{progress.progress}/{progress.total}</span>
+                <div className="flex items-center gap-3">
+                  {elapsed > 0 && (
+                    <span className="text-sm text-blue-400 font-mono tabular-nums">{formatElapsed(elapsed)}</span>
+                  )}
+                  <span className="text-sm text-gray-500">{progress.progress}/{progress.total}</span>
+                </div>
               </div>
               <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-500"
+                  className="h-full rounded-full transition-all duration-500 bar-shimmer"
                   style={{ width: `${(progress.progress / progress.total) * 100}%` }}
                 />
               </div>
-              <p className="text-xs text-gray-500 mt-1 capitalize">{progress.step.replace('_', ' ')}</p>
             </div>
           )}
           <div className="flex items-start">
             {STATUS_STEPS.map((step, idx) => {
               const isActive = idx === currentStepIdx;
               const isDone = idx < currentStepIdx;
+              const isConnectorActive = idx < STATUS_STEPS.length - 1 && idx === currentStepIdx - 1;
               return (
                 <div key={step.key} className="flex-1 flex flex-col items-center relative">
                   {/* Connector line */}
                   {idx < STATUS_STEPS.length - 1 && (
                     <div
                       className={`absolute top-4 left-[calc(50%+16px)] right-[calc(-50%+16px)] h-0.5 ${
-                        isDone ? "bg-green-600" : "bg-gray-700"
+                        isDone && !isConnectorActive ? "bg-green-600" : ""
+                      } ${isConnectorActive ? "connector-flow" : ""} ${
+                        !isDone && !isConnectorActive ? "bg-gray-700" : ""
                       }`}
                     />
                   )}
                   {/* Circle */}
                   <div
-                    className={`relative z-10 w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium
+                    className={`relative z-10 w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all duration-300
                       ${isDone ? "bg-green-600 text-white" : ""}
-                      ${isActive ? "bg-blue-600 text-white ring-4 ring-blue-600/20" : ""}
+                      ${isActive ? "bg-blue-600 text-white step-pulse" : ""}
                       ${!isDone && !isActive ? "bg-gray-800 text-gray-500 border border-gray-700" : ""}
                     `}
                   >
-                    {isDone ? <CheckCircle className="w-4 h-4" /> : idx + 1}
+                    {isDone ? (
+                      <CheckCircle className="w-4 h-4" />
+                    ) : isActive ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      idx + 1
+                    )}
                   </div>
-                  {/* Label */}
+                  {/* Label + elapsed */}
                   <span
                     className={`text-[11px] mt-2 text-center leading-tight ${
                       isActive ? "text-blue-400 font-medium" : isDone ? "text-green-400" : "text-gray-500"
@@ -309,6 +378,11 @@ export default function JobPage() {
                   >
                     {step.label}
                   </span>
+                  {isActive && elapsed > 0 && (
+                    <span className="text-[10px] mt-0.5 text-blue-300/60 font-mono tabular-nums">
+                      {formatElapsed(elapsed)}
+                    </span>
+                  )}
                 </div>
               );
             })}
