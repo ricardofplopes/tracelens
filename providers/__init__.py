@@ -6,6 +6,7 @@ from providers.yandex import YandexProvider
 from providers.web_search import WebSearchProvider
 from providers.social_media import SocialMediaProvider
 from providers.tineye import TinEyeProvider
+from providers.bing_visual import BingVisualProvider
 
 
 ALL_PROVIDERS = [
@@ -17,6 +18,7 @@ ALL_PROVIDERS = [
     WebSearchProvider(),
     SocialMediaProvider(),
     TinEyeProvider(),
+    BingVisualProvider(),
 ]
 
 

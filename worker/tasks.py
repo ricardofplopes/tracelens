@@ -165,6 +165,12 @@ def run_pipeline(job_id: str):
         update_job_status(session, job_id, "searching")
         search_terms = build_search_terms(session, job_id, analysis)
 
+        # Step 4b: Facebook direct URL lookup (from filename pattern)
+        try:
+            check_facebook_direct_lookup(session, job_id)
+        except Exception as e:
+            logger.debug("fb_direct_lookup_skipped", error=str(e))
+
         # Step 5: Run providers
         publish_progress(job_id, "search", 6, 10, "Searching providers...")
         run_providers(session, job_id, analysis, search_terms)
@@ -355,6 +361,120 @@ def build_search_terms(session: Session, job_id: str, analysis: dict) -> list[st
         fallback.append("image")
     logger.info("search_terms_fallback", job_id=job_id, terms=fallback)
     return fallback
+
+
+import re
+import httpx as sync_httpx
+
+# Facebook filename pattern: {user_numeric_id}_{photo_id}_{sequence}_n.jpg
+FB_FILENAME_PATTERN = re.compile(r'^(\d+)_(\d{10,})_(\d+)_[a-z]\.(?:jpg|jpeg|png)$', re.IGNORECASE)
+# Instagram pattern: various numeric patterns
+IG_FILENAME_PATTERN = re.compile(r'^(\d{5,})_(\d+)_(\d+)_[a-z]\.(?:jpg|jpeg|png)$', re.IGNORECASE)
+
+
+def check_facebook_direct_lookup(session: Session, job_id: str):
+    """Try to construct a direct Facebook URL from the filename pattern."""
+    job = session.query(Job).filter(Job.id == uuid.UUID(job_id)).first()
+    if not job or not job.original_filename:
+        return
+
+    filename = job.original_filename
+    match = FB_FILENAME_PATTERN.match(filename)
+    if not match:
+        return
+
+    # The second number group is typically the photo's unique Facebook ID
+    photo_id = match.group(2)
+    user_id = match.group(1)
+
+    # Construct candidate Facebook URLs
+    fb_urls = [
+        f"https://www.facebook.com/photo/?fbid={photo_id}",
+        f"https://www.facebook.com/photo.php?fbid={photo_id}",
+    ]
+
+    # Also try user profile URL
+    fb_profile_url = f"https://www.facebook.com/profile.php?id={user_id}"
+
+    logger.info("fb_direct_lookup", job_id=job_id, photo_id=photo_id, user_id=user_id)
+
+    # Create a provider run for this
+    provider_run = ProviderRun(
+        job_id=uuid.UUID(job_id),
+        provider_name="fb_direct_lookup",
+        status="running",
+        started_at=datetime.utcnow(),
+    )
+    session.add(provider_run)
+    session.flush()
+
+    results_added = 0
+
+    # Check each URL for accessibility
+    for url in fb_urls:
+        try:
+            resp = sync_httpx.head(
+                url,
+                follow_redirects=True,
+                timeout=10,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                },
+            )
+            # If we get a 200 or redirect to a valid FB page, it's likely valid
+            if resp.status_code in (200, 301, 302):
+                candidate = CandidateResult(
+                    job_id=uuid.UUID(job_id),
+                    provider_run_id=provider_run.id,
+                    provider_name="fb_direct_lookup",
+                    source_url=url,
+                    page_title=f"Facebook Photo (ID: {photo_id})",
+                    thumbnail_url="",
+                    match_type="exact",
+                    similarity_score=0.95,
+                    confidence=0.95,
+                    extracted_text=f"Direct Facebook photo URL constructed from filename: {filename}",
+                    extra_data={
+                        "provider": "fb_direct_lookup",
+                        "photo_id": photo_id,
+                        "user_id": user_id,
+                        "method": "filename_pattern",
+                    },
+                )
+                session.add(candidate)
+                results_added += 1
+                break  # Only add first working URL
+        except Exception as e:
+            logger.debug("fb_direct_url_check_failed", url=url, error=str(e))
+            continue
+
+    # Also add profile URL as a lower-confidence result
+    candidate_profile = CandidateResult(
+        job_id=uuid.UUID(job_id),
+        provider_run_id=provider_run.id,
+        provider_name="fb_direct_lookup",
+        source_url=fb_profile_url,
+        page_title=f"Facebook Profile (ID: {user_id})",
+        thumbnail_url="",
+        match_type="social_profile",
+        similarity_score=0.8,
+        confidence=0.75,
+        extracted_text=f"Facebook profile associated with image uploader (user ID: {user_id})",
+        extra_data={
+            "provider": "fb_direct_lookup",
+            "user_id": user_id,
+            "method": "filename_pattern",
+        },
+    )
+    session.add(candidate_profile)
+    results_added += 1
+
+    provider_run.status = "success"
+    provider_run.result_count = results_added
+    provider_run.completed_at = datetime.utcnow()
+    session.commit()
+
+    logger.info("fb_direct_lookup_complete", job_id=job_id, results=results_added)
 
 
 def run_providers(session: Session, job_id: str, analysis: dict, search_terms: list[str]):

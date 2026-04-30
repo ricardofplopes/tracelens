@@ -1,4 +1,5 @@
 import httpx
+import asyncio
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus
 import structlog
@@ -7,17 +8,17 @@ from shared.schemas import ProviderSearchResult
 
 logger = structlog.get_logger()
 
-# Social media platforms to search
+# Social media platforms to search (reduced to top 5 most relevant by default)
 SOCIAL_PLATFORMS = [
-    {"name": "Reddit", "site": "reddit.com", "weight": 0.7},
+    {"name": "Facebook", "site": "facebook.com", "weight": 0.75},
+    {"name": "Instagram", "site": "instagram.com", "weight": 0.75},
     {"name": "Twitter/X", "site": "twitter.com OR x.com", "weight": 0.7},
+    {"name": "Reddit", "site": "reddit.com", "weight": 0.7},
     {"name": "Pinterest", "site": "pinterest.com", "weight": 0.65},
-    {"name": "Flickr", "site": "flickr.com", "weight": 0.6},
-    {"name": "Tumblr", "site": "tumblr.com", "weight": 0.55},
-    {"name": "Instagram", "site": "instagram.com", "weight": 0.7},
-    {"name": "Facebook", "site": "facebook.com", "weight": 0.7},
     {"name": "LinkedIn", "site": "linkedin.com", "weight": 0.6},
     {"name": "TikTok", "site": "tiktok.com", "weight": 0.55},
+    {"name": "Flickr", "site": "flickr.com", "weight": 0.6},
+    {"name": "Tumblr", "site": "tumblr.com", "weight": 0.55},
     {"name": "VK", "site": "vk.com", "weight": 0.5},
 ]
 
@@ -56,8 +57,16 @@ class SocialMediaProvider(BaseProvider):
 
         seen_urls = set()
 
-        # Run platform-specific searches
-        for platform in SOCIAL_PLATFORMS:
+        # Limit to top 5 platforms to avoid rate-limiting
+        platforms_to_search = SOCIAL_PLATFORMS[:5]
+        if is_person:
+            # Prioritize FB/IG/LinkedIn for person images
+            platforms_to_search = [p for p in SOCIAL_PLATFORMS if p["name"] in [
+                "Facebook", "Instagram", "LinkedIn", "Twitter/X", "Pinterest"
+            ]]
+
+        # Run platform-specific searches with delays to avoid 403s
+        for platform in platforms_to_search:
             for query in queries[:2]:  # Use top 2 queries per platform
                 try:
                     site_query = f"site:{platform['site']} {query}"
@@ -65,9 +74,14 @@ class SocialMediaProvider(BaseProvider):
                         site_query, platform, seen_urls
                     )
                     results.extend(platform_results)
+                    # Rate-limit delay to avoid DuckDuckGo 403s
+                    await asyncio.sleep(1.5)
                 except Exception as e:
                     logger.debug("social_media_platform_failed",
                                  platform=platform["name"], error=str(e))
+                    # If rate-limited, wait longer before next request
+                    if "403" in str(e):
+                        await asyncio.sleep(3.0)
                     continue
 
         # If person detected, also run cross-platform person searches
@@ -125,7 +139,7 @@ class SocialMediaProvider(BaseProvider):
 
     async def _search_ddg(self, query: str, platform: dict,
                           seen_urls: set) -> list[ProviderSearchResult]:
-        """Search DuckDuckGo for a specific platform query."""
+        """Search DuckDuckGo for a specific platform query with retry on 403."""
         results = []
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -133,13 +147,28 @@ class SocialMediaProvider(BaseProvider):
                           "Chrome/120.0.0.0 Safari/537.36"
         }
 
-        async with httpx.AsyncClient(timeout=self.TIMEOUT, follow_redirects=True) as client:
-            resp = await client.post(
-                self.DDG_URL,
-                data={"q": query},
-                headers=headers,
-            )
-            resp.raise_for_status()
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=self.TIMEOUT, follow_redirects=True) as client:
+                    resp = await client.post(
+                        self.DDG_URL,
+                        data={"q": query},
+                        headers=headers,
+                    )
+                    if resp.status_code == 403:
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(3.0 * (attempt + 1))
+                            continue
+                        else:
+                            raise Exception(f"403 Forbidden after {max_retries} attempts")
+                    resp.raise_for_status()
+                break
+            except httpx.HTTPStatusError as e:
+                if "403" in str(e) and attempt < max_retries - 1:
+                    await asyncio.sleep(3.0 * (attempt + 1))
+                    continue
+                raise
 
         soup = BeautifulSoup(resp.text, "html.parser")
         result_links = soup.select(".result__a")
@@ -205,6 +234,9 @@ class SocialMediaProvider(BaseProvider):
                         data={"q": query},
                         headers=headers,
                     )
+                    if resp.status_code == 403:
+                        await asyncio.sleep(3.0)
+                        continue
                     resp.raise_for_status()
 
                 soup = BeautifulSoup(resp.text, "html.parser")
@@ -248,8 +280,13 @@ class SocialMediaProvider(BaseProvider):
                         },
                     ))
 
+                # Rate-limit delay
+                await asyncio.sleep(1.5)
+
             except Exception as e:
                 logger.debug("person_profile_search_failed", query=query, error=str(e))
+                if "403" in str(e):
+                    await asyncio.sleep(3.0)
                 continue
 
         return results

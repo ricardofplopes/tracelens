@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import {
   Loader2, CheckCircle, XCircle, Clock, Search,
-  ExternalLink, Filter, ChevronDown, ChevronUp, Eye, Download
+  ExternalLink, Filter, ChevronDown, ChevronUp, Eye, Download, Globe
 } from "lucide-react";
 
 const API_BASE = "";
@@ -614,53 +614,67 @@ export default function JobPage() {
       {/* Results Grid */}
       {filteredCandidates.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {filteredCandidates.map((c) => (
-            <div
-              key={c.id}
-              className="bg-gray-900/50 border border-gray-800 rounded-xl p-4 hover:border-gray-700 transition-colors"
-            >
-              <div className="flex items-start gap-3">
-                {c.thumbnail_url && (
-                  <img
-                    src={c.thumbnail_url}
-                    alt=""
-                    className="w-20 h-20 object-cover rounded-lg flex-shrink-0 bg-gray-800"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.display = "none";
-                    }}
-                  />
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <MatchTypeBadge type={c.match_type} />
-                    <span className="text-xs text-gray-500">{c.provider_name}</span>
-                    <div className="ml-auto">
-                      <ConfidenceBadge confidence={c.confidence} />
+          {filteredCandidates.map((c) => {
+            const domain = c.source_url ? new URL(c.source_url).hostname : "";
+            const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=32` : "";
+            return (
+              <div
+                key={c.id}
+                className="bg-gray-900/50 border border-gray-800 rounded-xl p-4 hover:border-gray-700 transition-colors"
+              >
+                <div className="flex items-start gap-3">
+                  {c.thumbnail_url ? (
+                    <img
+                      src={c.thumbnail_url}
+                      alt=""
+                      className="w-20 h-20 object-cover rounded-lg flex-shrink-0 bg-gray-800"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = "none";
+                      }}
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded-lg flex-shrink-0 bg-gray-800 border border-gray-700 flex items-center justify-center">
+                      {faviconUrl ? (
+                        <img src={faviconUrl} alt="" className="w-5 h-5" onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = "none";
+                        }} />
+                      ) : (
+                        <Globe className="w-5 h-5 text-gray-500" />
+                      )}
                     </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <MatchTypeBadge type={c.match_type} />
+                      <span className="text-xs text-gray-500">{c.provider_name}</span>
+                      <div className="ml-auto">
+                        <ConfidenceBadge confidence={c.confidence} />
+                      </div>
+                    </div>
+                    <h4 className="text-sm font-medium truncate">
+                      {c.page_title || "Untitled"}
+                    </h4>
+                    {c.source_url && (
+                      <a
+                        href={c.source_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 mt-1 truncate"
+                      >
+                        <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                        <span className="truncate">{c.source_url}</span>
+                      </a>
+                    )}
+                    {c.extracted_text && (
+                      <p className="text-xs text-gray-500 mt-2 line-clamp-2">
+                        {c.extracted_text}
+                      </p>
+                    )}
                   </div>
-                  <h4 className="text-sm font-medium truncate">
-                    {c.page_title || "Untitled"}
-                  </h4>
-                  {c.source_url && (
-                    <a
-                      href={c.source_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 mt-1 truncate"
-                    >
-                      <ExternalLink className="w-3 h-3 flex-shrink-0" />
-                      <span className="truncate">{c.source_url}</span>
-                    </a>
-                  )}
-                  {c.extracted_text && (
-                    <p className="text-xs text-gray-500 mt-2 line-clamp-2">
-                      {c.extracted_text}
-                    </p>
-                  )}
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
