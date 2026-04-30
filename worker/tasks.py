@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 import structlog
@@ -108,7 +109,7 @@ def update_job_status(session: Session, job_id: str, status: str, error: str = N
         session.commit()
 
 
-@shared_task(name="worker.tasks.run_pipeline")
+@shared_task(name="worker.tasks.run_pipeline", soft_time_limit=1800, time_limit=2100)
 def run_pipeline(job_id: str):
     """Main pipeline task - orchestrates the full investigation."""
     logger.info("pipeline_started", job_id=job_id)
@@ -187,9 +188,10 @@ def run_pipeline(job_id: str):
             pass
         logger.info("pipeline_complete", job_id=job_id)
 
-    except Exception as e:
-        logger.error("pipeline_failed", job_id=job_id, error=str(e))
-        update_job_status(session, job_id, "failed", error=str(e))
+    except (Exception, SoftTimeLimitExceeded) as e:
+        error_msg = f"Pipeline timed out after 30 minutes" if isinstance(e, SoftTimeLimitExceeded) else str(e)
+        logger.error("pipeline_failed", job_id=job_id, error=error_msg)
+        update_job_status(session, job_id, "failed", error=error_msg)
         try:
             r = sync_redis.from_url(settings.REDIS_URL)
             r.publish(f"job:{job_id}:progress", json.dumps({"event": "failed", "job_id": job_id, "error": str(e)}))
@@ -216,6 +218,15 @@ def ingest_image(session: Session, job_id: str):
 
     if not original:
         raise ValueError(f"No original asset for job {job_id}")
+
+    # Skip if variants already exist (idempotent re-run)
+    existing_variants = session.query(Asset).filter(
+        Asset.job_id == uuid.UUID(job_id),
+        Asset.variant != "original"
+    ).count()
+    if existing_variants > 0:
+        logger.info("ingestion_skipped_already_done", job_id=job_id)
+        return
 
     job_dir = os.path.dirname(original.file_path)
     variants = generate_variants(original.file_path, job_dir)
@@ -250,11 +261,21 @@ def extract_features(session: Session, job_id: str):
 
     features_data = extract_all_features(original.file_path)
 
-    feature = ExtractedFeature(
-        job_id=uuid.UUID(job_id),
-        **features_data,
-    )
-    session.add(feature)
+    # Upsert: update existing or create new
+    existing = session.query(ExtractedFeature).filter(
+        ExtractedFeature.job_id == uuid.UUID(job_id)
+    ).first()
+
+    if existing:
+        for key, value in features_data.items():
+            setattr(existing, key, value)
+    else:
+        feature = ExtractedFeature(
+            job_id=uuid.UUID(job_id),
+            **features_data,
+        )
+        session.add(feature)
+
     session.commit()
     logger.info("feature_extraction_complete", job_id=job_id)
 
