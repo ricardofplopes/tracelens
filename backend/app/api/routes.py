@@ -437,20 +437,32 @@ async def system_info():
 
 
 @router.get("/jobs/{job_id}/stream")
-async def stream_job_progress(job_id: uuid.UUID):
+async def stream_job_progress(job_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     """Stream job progress via SSE."""
     import redis.asyncio as aioredis
 
+    # Check if job is already in terminal state
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    terminal_status = None
+    if job and job.status in ("complete", "failed"):
+        terminal_status = job.status
+
     async def event_generator():
+        # Send initial connection event
+        yield f"data: {json.dumps({'event': 'connected', 'job_id': str(job_id)})}\n\n"
+
+        # If job is already done, immediately send terminal event
+        if terminal_status:
+            yield f"data: {json.dumps({'event': terminal_status, 'job_id': str(job_id)})}\n\n"
+            return
+
         r = aioredis.from_url(settings.REDIS_URL)
         pubsub = r.pubsub()
         channel = f"job:{job_id}:progress"
         await pubsub.subscribe(channel)
 
         try:
-            # Send initial connection event
-            yield f"data: {json.dumps({'event': 'connected', 'job_id': str(job_id)})}\n\n"
-
             while True:
                 message = await asyncio.wait_for(
                     pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0),

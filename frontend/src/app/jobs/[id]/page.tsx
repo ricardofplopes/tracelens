@@ -177,11 +177,7 @@ export default function JobPage() {
         const data = JSON.parse(event.data);
         if (data.event === "progress") {
           setProgress({ step: data.step, progress: data.progress, total: data.total, message: data.message });
-        } else if (data.event === "complete") {
-          setProgress(null);
-          fetchData();
-          evtSource.close();
-        } else if (data.event === "failed") {
+        } else if (data.event === "complete" || data.event === "failed") {
           setProgress(null);
           fetchData();
           evtSource.close();
@@ -193,11 +189,6 @@ export default function JobPage() {
 
     evtSource.onerror = () => {
       evtSource.close();
-      // Fall back to polling
-      const interval = setInterval(() => {
-        fetchData();
-      }, 3000);
-      return () => clearInterval(interval);
     };
 
     return () => evtSource.close();
