@@ -556,16 +556,30 @@ def generate_report(session: Session, job_id: str, analysis: dict):
     # Build search terms list for storage
     search_terms = analysis.get("entities", []) + analysis.get("brands", []) + analysis.get("landmarks", [])
 
-    report = FinalReport(
-        job_id=uuid.UUID(job_id),
-        summary=summary,
-        ai_description=analysis.get("raw_description", ""),
-        entities={"entities": analysis.get("entities", []), "brands": analysis.get("brands", []), "landmarks": analysis.get("landmarks", [])},
-        search_terms={"terms": search_terms},
-        cluster_count=len(clusters),
-        top_matches={"matches": top_matches[:10]},
-    )
-    session.add(report)
+    # Upsert report
+    existing_report = session.query(FinalReport).filter(
+        FinalReport.job_id == uuid.UUID(job_id)
+    ).first()
+
+    if existing_report:
+        existing_report.summary = summary
+        existing_report.ai_description = analysis.get("raw_description", "")
+        existing_report.entities = {"entities": analysis.get("entities", []), "brands": analysis.get("brands", []), "landmarks": analysis.get("landmarks", [])}
+        existing_report.search_terms = {"terms": search_terms}
+        existing_report.cluster_count = len(clusters)
+        existing_report.top_matches = {"matches": top_matches[:10]}
+    else:
+        report = FinalReport(
+            job_id=uuid.UUID(job_id),
+            summary=summary,
+            ai_description=analysis.get("raw_description", ""),
+            entities={"entities": analysis.get("entities", []), "brands": analysis.get("brands", []), "landmarks": analysis.get("landmarks", [])},
+            search_terms={"terms": search_terms},
+            cluster_count=len(clusters),
+            top_matches={"matches": top_matches[:10]},
+        )
+        session.add(report)
+
     session.commit()
     logger.info("report_generated", job_id=job_id, clusters=len(clusters))
 
