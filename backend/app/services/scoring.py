@@ -8,6 +8,7 @@ logger = structlog.get_logger()
 SOURCE_CONFIDENCE = {
     "google_lens": 0.9,
     "yandex": 0.85,
+    "tineye": 0.9,
     "saucenao": 0.8,
     "iqdb": 0.75,
     "social_media": 0.65,

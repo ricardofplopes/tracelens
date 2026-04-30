@@ -318,6 +318,8 @@ async def list_providers():
         ProviderInfo(name="google_lens", enabled=settings.GOOGLE_LENS_ENABLED, experimental=True, description="[Experimental] Google Lens via browser automation", priority=priorities.get("google_lens", 5)),
         ProviderInfo(name="yandex", enabled=settings.YANDEX_ENABLED, experimental=True, description="[Experimental] Yandex Images via browser automation", priority=priorities.get("yandex", 5)),
         ProviderInfo(name="web_search", enabled=settings.WEB_SEARCH_ENABLED, description="Generic web search using OCR + AI terms", priority=priorities.get("web_search", 5)),
+        ProviderInfo(name="social_media", enabled=settings.SOCIAL_MEDIA_ENABLED, description="Social media search (Facebook, Instagram, LinkedIn, etc.)", priority=priorities.get("social_media", 5)),
+        ProviderInfo(name="tineye", enabled=settings.TINEYE_ENABLED, experimental=True, description="[Experimental] TinEye reverse image search via browser", priority=priorities.get("tineye", 5)),
     ]
     # Sort by priority descending
     providers.sort(key=lambda x: x.priority, reverse=True)

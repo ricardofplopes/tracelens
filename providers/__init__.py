@@ -5,6 +5,7 @@ from providers.google_lens import GoogleLensProvider
 from providers.yandex import YandexProvider
 from providers.web_search import WebSearchProvider
 from providers.social_media import SocialMediaProvider
+from providers.tineye import TinEyeProvider
 
 
 ALL_PROVIDERS = [
@@ -15,6 +16,7 @@ ALL_PROVIDERS = [
     YandexProvider(),
     WebSearchProvider(),
     SocialMediaProvider(),
+    TinEyeProvider(),
 ]
 
 
