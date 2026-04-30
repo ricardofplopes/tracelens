@@ -142,7 +142,6 @@ export default function JobPage() {
   const [error, setError] = useState("");
   const [filterProvider, setFilterProvider] = useState<string>("all");
   const [filterType, setFilterType] = useState<string>("all");
-  const [showFeatures, setShowFeatures] = useState(false);
   const [showReport, setShowReport] = useState(true);
   const [progress, setProgress] = useState<{step: string; progress: number; total: number; message: string} | null>(null);
   const [stepStartTime, setStepStartTime] = useState<number | null>(null);
@@ -177,41 +176,70 @@ export default function JobPage() {
 
   useEffect(() => {
     fetchData();
-    // Start elapsed timer from page load for in-progress jobs
     setStepStartTime(Date.now());
 
-    // Set up SSE for live progress updates
-    const evtSource = new EventSource(`${API_BASE}/api/jobs/${jobId}/stream`);
+    // Polling fallback: refetch job data every 5s while processing
+    // This is the reliable path since Next.js proxy buffers SSE
+    const pollInterval = setInterval(() => {
+      fetchData();
+    }, 5000);
 
-    evtSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.event === "progress") {
-          setProgress((prev) => {
-            if (!prev || prev.step !== data.step) {
-              setStepStartTime(Date.now());
-              setElapsed(0);
-            }
-            return { step: data.step, progress: data.progress, total: data.total, message: data.message };
-          });
-        } else if (data.event === "complete" || data.event === "failed") {
-          setProgress(null);
-          setStepStartTime(null);
-          setElapsed(0);
-          fetchData();
-          evtSource.close();
+    // Also try SSE for faster updates (best-effort)
+    let evtSource: EventSource | null = null;
+    let reconnectTimeout: NodeJS.Timeout | null = null;
+
+    const connectSSE = () => {
+      evtSource = new EventSource(`${API_BASE}/api/jobs/${jobId}/stream`);
+
+      evtSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.event === "progress") {
+            setProgress((prev) => {
+              if (!prev || prev.step !== data.step) {
+                setStepStartTime(Date.now());
+                setElapsed(0);
+              }
+              return { step: data.step, progress: data.progress, total: data.total, message: data.message };
+            });
+            // Also refetch to update job status for stepper
+            fetchData();
+          } else if (data.event === "complete" || data.event === "failed") {
+            setProgress(null);
+            setStepStartTime(null);
+            setElapsed(0);
+            fetchData();
+            evtSource?.close();
+            clearInterval(pollInterval);
+          }
+        } catch {
+          // Ignore parse errors
         }
-      } catch {
-        // Ignore parse errors
-      }
+      };
+
+      evtSource.onerror = () => {
+        evtSource?.close();
+        // Reconnect after 5s
+        reconnectTimeout = setTimeout(connectSSE, 5000);
+      };
     };
 
-    evtSource.onerror = () => {
-      evtSource.close();
-    };
+    connectSSE();
 
-    return () => evtSource.close();
+    return () => {
+      clearInterval(pollInterval);
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      evtSource?.close();
+    };
   }, [fetchData, jobId]);
+
+  // Stop polling once job is terminal
+  useEffect(() => {
+    if (job && ["complete", "failed"].includes(job.status)) {
+      setProgress(null);
+      setStepStartTime(null);
+    }
+  }, [job?.status]);
 
   // Elapsed timer for active step
   useEffect(() => {
@@ -412,15 +440,9 @@ export default function JobPage() {
 
         {/* Features Panel */}
         <div className="lg:col-span-2 bg-gray-900/50 border border-gray-800 rounded-xl p-4">
-          <button
-            onClick={() => setShowFeatures(!showFeatures)}
-            className="flex items-center justify-between w-full text-sm font-semibold text-gray-400"
-          >
-            <span>Extracted Features</span>
-            {showFeatures ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-          </button>
-          {showFeatures && features && (
-            <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+          <h3 className="text-sm font-semibold text-gray-400 mb-4">Extracted Features</h3>
+          {features ? (
+            <div className="grid grid-cols-2 gap-3 text-sm">
               {features.sha256 && (
                 <div>
                   <span className="text-gray-500">SHA-256:</span>
@@ -472,9 +494,8 @@ export default function JobPage() {
                 </div>
               )}
             </div>
-          )}
-          {showFeatures && !features && (
-            <p className="text-gray-500 text-sm mt-4">Features not yet extracted</p>
+          ) : (
+            <p className="text-gray-500 text-sm">Features not yet extracted</p>
           )}
         </div>
       </div>

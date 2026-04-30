@@ -200,7 +200,16 @@ async def list_jobs(
     jobs = result.scalars().all()
 
     return {
-        "jobs": [JobResponse.model_validate(j) for j in jobs],
+        "jobs": [
+            {
+                **JobResponse.model_validate(j).model_dump(),
+                "thumbnail": next(
+                    (a.file_path.replace("/app/uploads", "/uploads") for a in j.assets if a.variant == "original"),
+                    None,
+                ),
+            }
+            for j in jobs
+        ],
         "total": total,
         "page": page,
         "pages": (total + limit - 1) // limit,
@@ -407,6 +416,42 @@ async def retry_job_providers(job_id: uuid.UUID, body: RetryRequest, db: AsyncSe
     return {"status": "retrying", "job_id": str(job_id), "providers": body.providers}
 
 
+@router.delete("/jobs/{job_id}")
+async def delete_job(job_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Delete a job and all its related data."""
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Delete in correct order (respecting foreign keys)
+    await db.execute(
+        CandidateResult.__table__.delete().where(CandidateResult.job_id == job_id)
+    )
+    await db.execute(
+        FinalReport.__table__.delete().where(FinalReport.job_id == job_id)
+    )
+    await db.execute(
+        ProviderRun.__table__.delete().where(ProviderRun.job_id == job_id)
+    )
+    await db.execute(
+        ExtractedFeature.__table__.delete().where(ExtractedFeature.job_id == job_id)
+    )
+    await db.execute(
+        Asset.__table__.delete().where(Asset.job_id == job_id)
+    )
+    await db.delete(job)
+    await db.commit()
+
+    # Clean up files
+    job_dir = os.path.join(settings.UPLOAD_DIR, str(job_id))
+    if os.path.exists(job_dir):
+        import shutil as sh
+        sh.rmtree(job_dir, ignore_errors=True)
+
+    return {"status": "deleted", "job_id": str(job_id)}
+
+
 @router.get("/system/info")
 async def system_info():
     """Get system resource information."""
@@ -468,7 +513,7 @@ async def stream_job_progress(job_id: uuid.UUID, db: AsyncSession = Depends(get_
             while True:
                 message = await asyncio.wait_for(
                     pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0),
-                    timeout=30.0,
+                    timeout=1800.0,
                 )
                 if message and message["type"] == "message":
                     yield f"data: {message['data'].decode()}\n\n"

@@ -4,18 +4,10 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   Loader2, CheckCircle, XCircle, Clock, Search,
-  ChevronLeft, ChevronRight, ImageIcon, Globe,
+  ChevronLeft, ChevronRight, ImageIcon, Globe, Trash2,
 } from "lucide-react";
 
 const API_BASE = "";
-
-interface Asset {
-  id: string;
-  variant: string;
-  file_path: string;
-  width: number | null;
-  height: number | null;
-}
 
 interface Job {
   id: string;
@@ -26,7 +18,7 @@ interface Job {
   error_message: string | null;
   created_at: string;
   updated_at: string;
-  assets?: Asset[];
+  thumbnail: string | null;
 }
 
 interface JobsResponse {
@@ -115,9 +107,19 @@ export default function JobsPage() {
   };
 
   const getThumbnail = (job: Job) => {
-    const original = job.assets?.find((a) => a.variant === "original");
-    if (original) return `${API_BASE}/api/jobs/${job.id}/assets/${original.id}`;
+    if (job.thumbnail) return `${API_BASE}${job.thumbnail}`;
     return null;
+  };
+
+  const handleDelete = async (jobId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm("Delete this investigation? This cannot be undone.")) return;
+    try {
+      await fetch(`${API_BASE}/api/jobs/${jobId}`, { method: "DELETE" });
+      fetchJobs();
+    } catch {
+      // Ignore errors
+    }
   };
 
   return (
@@ -172,6 +174,7 @@ export default function JobsPage() {
                   <th className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider px-4 py-3">Source</th>
                   <th className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider px-4 py-3">Status</th>
                   <th className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider px-4 py-3">Created</th>
+                  <th className="text-left text-xs font-medium text-gray-500 uppercase tracking-wider px-4 py-3 w-12"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800/50">
@@ -213,6 +216,15 @@ export default function JobsPage() {
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-400">
                         {formatDate(job.created_at)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <button
+                          onClick={(e) => handleDelete(job.id, e)}
+                          className="p-1.5 rounded-md text-gray-500 hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                          title="Delete investigation"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </td>
                     </tr>
                   );
