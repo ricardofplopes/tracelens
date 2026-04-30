@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import {
   Loader2, CheckCircle, XCircle, Clock, Search,
-  ExternalLink, Filter, ChevronDown, ChevronUp, Eye, Download, Globe
+  ExternalLink, Filter, ChevronDown, ChevronUp, Eye, Download, Globe, CalendarClock, X
 } from "lucide-react";
 
 const API_BASE = "";
@@ -18,6 +18,10 @@ interface Job {
   error_message: string | null;
   created_at: string;
   updated_at: string;
+  check_interval_hours: number | null;
+  next_check_at: string | null;
+  recheck_count: number;
+  parent_job_id: string | null;
 }
 
 interface Asset {
@@ -146,6 +150,9 @@ export default function JobPage() {
   const [progress, setProgress] = useState<{step: string; progress: number; total: number; message: string} | null>(null);
   const [stepStartTime, setStepStartTime] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [scheduleInterval, setScheduleInterval] = useState(24);
+  const [schedulingInProgress, setSchedulingInProgress] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -302,18 +309,101 @@ export default function JobPage() {
                 JSON
               </a>
               <a
+                href={`/api/jobs/${jobId}/export?format=pdf`}
+                download
+                className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-gray-300 flex items-center gap-1.5 transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                PDF
+              </a>
+              <a
                 href={`/api/jobs/${jobId}/export?format=html`}
                 download
                 className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-gray-300 flex items-center gap-1.5 transition-colors"
               >
                 <Download className="w-3.5 h-3.5" />
-                Report
+                HTML
               </a>
             </>
+          )}
+          {job.status === "complete" && (
+            <button
+              onClick={() => setShowSchedule(!showSchedule)}
+              className={`px-3 py-1.5 text-xs border rounded-lg flex items-center gap-1.5 transition-colors ${
+                job.check_interval_hours
+                  ? "bg-indigo-900/50 border-indigo-700 text-indigo-300 hover:bg-indigo-800/50"
+                  : "bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-300"
+              }`}
+            >
+              <CalendarClock className="w-3.5 h-3.5" />
+              {job.check_interval_hours ? `Re-check every ${job.check_interval_hours}h` : "Schedule"}
+            </button>
           )}
           <StatusBadge status={job.status} />
         </div>
       </div>
+
+      {/* Schedule Re-check Panel */}
+      {showSchedule && job.status === "complete" && (
+        <div className="bg-gray-900/80 border border-gray-700 rounded-xl p-4 flex items-center gap-4 flex-wrap">
+          <span className="text-sm text-gray-300">Re-check every</span>
+          <select
+            value={scheduleInterval}
+            onChange={(e) => setScheduleInterval(Number(e.target.value))}
+            className="bg-gray-800 border border-gray-600 rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value={1}>1 hour</option>
+            <option value={6}>6 hours</option>
+            <option value={12}>12 hours</option>
+            <option value={24}>24 hours</option>
+            <option value={48}>48 hours</option>
+            <option value={168}>7 days</option>
+          </select>
+          <button
+            disabled={schedulingInProgress}
+            onClick={async () => {
+              setSchedulingInProgress(true);
+              try {
+                const res = await fetch(`${API_BASE}/api/jobs/${jobId}/schedule`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ interval_hours: scheduleInterval }),
+                });
+                if (res.ok) {
+                  const data = await res.json();
+                  setJob(prev => prev ? { ...prev, check_interval_hours: data.interval_hours, next_check_at: data.next_check_at } : prev);
+                  setShowSchedule(false);
+                }
+              } finally {
+                setSchedulingInProgress(false);
+              }
+            }}
+            className="px-4 py-1.5 text-sm bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 text-white rounded-lg transition-colors"
+          >
+            {schedulingInProgress ? "Saving..." : "Enable"}
+          </button>
+          {job.check_interval_hours && (
+            <button
+              onClick={async () => {
+                const res = await fetch(`${API_BASE}/api/jobs/${jobId}/schedule`, { method: "DELETE" });
+                if (res.ok) {
+                  setJob(prev => prev ? { ...prev, check_interval_hours: null, next_check_at: null } : prev);
+                  setShowSchedule(false);
+                }
+              }}
+              className="px-3 py-1.5 text-sm text-red-400 hover:text-red-300 border border-red-800 rounded-lg transition-colors"
+            >
+              <X className="w-3.5 h-3.5 inline mr-1" />
+              Cancel Schedule
+            </button>
+          )}
+          {job.next_check_at && (
+            <span className="text-xs text-gray-500">
+              Next: {new Date(job.next_check_at).toLocaleString()}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Progress Steps */}
       {isProcessing && (

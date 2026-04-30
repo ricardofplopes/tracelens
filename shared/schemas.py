@@ -17,6 +17,10 @@ class JobResponse(BaseModel):
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    check_interval_hours: Optional[int] = None
+    next_check_at: Optional[datetime] = None
+    recheck_count: int = 0
+    parent_job_id: Optional[uuid.UUID] = None
 
     model_config = {"from_attributes": True}
 

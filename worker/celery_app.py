@@ -19,4 +19,10 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_soft_time_limit=1800,
     task_time_limit=2400,
+    beat_schedule={
+        "check-scheduled-rechecks": {
+            "task": "worker.tasks.process_scheduled_rechecks",
+            "schedule": 3600.0,  # Every hour
+        },
+    },
 )

@@ -875,3 +875,91 @@ def retry_providers(self, job_id: str, provider_names: list[str] | None = None):
         update_job_status(session, job_id, "failed", error=f"Retry failed: {str(e)}")
     finally:
         session.close()
+
+
+@shared_task(name="worker.tasks.process_scheduled_rechecks")
+def process_scheduled_rechecks():
+    """Check for jobs due for re-check and dispatch new pipelines."""
+    session = get_session()
+    try:
+        from datetime import timedelta
+        now = datetime.utcnow()
+        
+        # Find jobs with scheduled re-checks that are due
+        due_jobs = session.query(Job).filter(
+            Job.next_check_at <= now,
+            Job.check_interval_hours.isnot(None),
+            Job.status == "complete",
+        ).all()
+        
+        logger.info("scheduled_recheck_scan", due_count=len(due_jobs))
+        
+        for parent_job in due_jobs:
+            try:
+                # Get the original asset
+                original = session.query(Asset).filter(
+                    Asset.job_id == parent_job.id,
+                    Asset.variant == "original",
+                ).first()
+                
+                if not original or not original.file_path or not os.path.exists(original.file_path):
+                    logger.warning("recheck_skip_no_asset", job_id=str(parent_job.id))
+                    parent_job.next_check_at = now + timedelta(hours=parent_job.check_interval_hours)
+                    continue
+                
+                # Create a new job for the re-check
+                import shutil
+                new_job_id = uuid.uuid4()
+                new_job_dir = os.path.join(settings.UPLOAD_DIR, str(new_job_id))
+                os.makedirs(new_job_dir, exist_ok=True)
+                
+                ext = os.path.splitext(original.file_path)[1]
+                new_file_path = os.path.join(new_job_dir, f"original{ext}")
+                shutil.copy2(original.file_path, new_file_path)
+                
+                new_job = Job(
+                    id=new_job_id,
+                    status="pending",
+                    image_source=parent_job.image_source,
+                    source_url=parent_job.source_url,
+                    original_filename=parent_job.original_filename,
+                    parent_job_id=parent_job.id,
+                    recheck_count=parent_job.recheck_count + 1,
+                )
+                session.add(new_job)
+                
+                # Create asset for the new job
+                new_asset = Asset(
+                    job_id=new_job_id,
+                    variant="original",
+                    file_path=new_file_path,
+                    width=original.width,
+                    height=original.height,
+                    mime_type=original.mime_type,
+                    file_size=original.file_size,
+                )
+                session.add(new_asset)
+                session.flush()
+                
+                # Dispatch pipeline for the new job
+                from celery import current_app
+                current_app.send_task("worker.tasks.run_pipeline", args=[str(new_job_id)])
+                
+                # Update parent's next check time
+                parent_job.next_check_at = now + timedelta(hours=parent_job.check_interval_hours)
+                parent_job.recheck_count += 1
+                
+                logger.info("recheck_dispatched", parent_id=str(parent_job.id), new_id=str(new_job_id))
+                
+            except Exception as e:
+                logger.error("recheck_dispatch_failed", job_id=str(parent_job.id), error=str(e))
+                parent_job.next_check_at = now + timedelta(hours=parent_job.check_interval_hours)
+        
+        session.commit()
+        return {"processed": len(due_jobs)}
+    except Exception as e:
+        logger.error("scheduled_recheck_failed", error=str(e))
+        session.rollback()
+        return {"error": str(e)}
+    finally:
+        session.close()

@@ -12,9 +12,12 @@ TraceLens accepts an image (upload or URL) and runs a comprehensive investigatio
 1. **Ingests** the image and generates normalized variants (resized, cropped, grayscale, sharpened)
 2. **Extracts features** — SHA-256, perceptual hashes (pHash, dHash, aHash), ORB keypoints, color histograms, EXIF metadata, OCR text
 3. **Analyzes with AI** — uses Ollama vision models for captioning, entity extraction, landmark/brand detection
-4. **Searches** multiple reverse image search engines in parallel
+4. **Searches** multiple reverse image search engines in parallel (10 providers)
 5. **Scores and ranks** results using perceptual similarity, text overlap, entity matching
 6. **Generates a report** with AI-synthesized findings
+7. **Exports** results as PDF, JSON, or HTML reports
+
+Supports **batch processing** (multiple images at once) and **scheduled re-checks** (periodic re-investigation).
 
 ## Architecture
 
@@ -235,15 +238,23 @@ Ollama works on CPU, but analysis will be slower. Remove the GPU reservation fro
 - Docker Compose one-command startup
 
 ### 🔮 Future improvements
-- WebSocket for real-time job status updates
 - User accounts and investigation history
-- TinEye API integration
-- Bing Visual Search provider
 - S3/MinIO file storage
-- Export reports (PDF, JSON)
-- Result caching across jobs
-- Scheduled re-checks
-- Batch image processing
+- Custom provider weights via settings UI
+- Drag-and-drop provider priority reordering
+
+### ✅ Recently added
+- Real-time job status updates (SSE + polling fallback)
+- TinEye reverse image search integration
+- Bing Visual Search provider
+- Facebook/Instagram image lookup (direct URL + Bing indexing)
+- Export reports (PDF, JSON, HTML)
+- Result caching across jobs (SHA-256 dedup)
+- Scheduled re-checks (hourly Celery Beat scan)
+- Batch image processing (multi-file upload)
+- Image validation and security (magic bytes, GPS stripping)
+- Job deletion with cascade cleanup
+- Animated progress stepper with elapsed time
 
 ## Development
 

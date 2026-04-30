@@ -164,6 +164,131 @@ async def create_job(
     return job
 
 
+class BatchJobRequest(PydanticBaseModel):
+    urls: list[str] = []
+
+
+@router.post("/jobs/batch")
+async def create_batch_jobs(
+    request: Request,
+    files: list[UploadFile] = File(None),
+    source_urls: str | None = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create multiple investigation jobs from files and/or URLs."""
+    created_jobs = []
+    errors = []
+
+    # Parse URLs from comma/newline separated string
+    urls = []
+    if source_urls:
+        urls = [u.strip() for u in source_urls.replace(",", "\n").split("\n") if u.strip()]
+
+    if not files and not urls:
+        raise HTTPException(status_code=400, detail="Provide files and/or URLs")
+
+    # Process uploaded files
+    for f in (files or []):
+        try:
+            job_id = uuid.uuid4()
+            job_dir = os.path.join(settings.UPLOAD_DIR, str(job_id))
+            os.makedirs(job_dir, exist_ok=True)
+
+            ext = os.path.splitext(f.filename)[1] if f.filename else ".jpg"
+            file_path = os.path.join(job_dir, f"original{ext}")
+            with open(file_path, "wb") as out:
+                shutil.copyfileobj(f.file, out)
+
+            is_valid, error_msg = validate_image(file_path, max_size_mb=settings.MAX_UPLOAD_SIZE_MB)
+            if not is_valid:
+                shutil.rmtree(job_dir, ignore_errors=True)
+                errors.append({"source": f.filename, "error": error_msg})
+                continue
+            strip_gps_exif(file_path)
+
+            job = Job(id=job_id, status="pending", image_source="upload", original_filename=f.filename)
+            db.add(job)
+
+            file_size = os.path.getsize(file_path)
+            from PIL import Image
+            try:
+                with Image.open(file_path) as img:
+                    w, h = img.size
+                    mime = Image.MIME.get(img.format, "image/jpeg")
+            except Exception:
+                w, h, mime = None, None, "image/jpeg"
+
+            asset = Asset(job_id=job_id, variant="original", file_path=file_path,
+                         width=w, height=h, mime_type=mime, file_size=file_size)
+            db.add(asset)
+            await db.flush()
+
+            from celery import Celery
+            celery_client = Celery(broker=settings.CELERY_BROKER_URL)
+            celery_client.send_task("worker.tasks.run_pipeline", args=[str(job_id)])
+            created_jobs.append({"job_id": str(job_id), "source": f.filename})
+        except Exception as e:
+            errors.append({"source": f.filename or "unknown", "error": str(e)})
+
+    # Process URLs
+    for url in urls:
+        try:
+            job_id = uuid.uuid4()
+            job_dir = os.path.join(settings.UPLOAD_DIR, str(job_id))
+            os.makedirs(job_dir, exist_ok=True)
+
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                content_type = resp.headers.get("content-type", "")
+                ext = ".jpg"
+                if "png" in content_type: ext = ".png"
+                elif "gif" in content_type: ext = ".gif"
+                elif "webp" in content_type: ext = ".webp"
+                file_path = os.path.join(job_dir, f"original{ext}")
+                with open(file_path, "wb") as out:
+                    out.write(resp.content)
+
+            is_valid, error_msg = validate_image(file_path, max_size_mb=settings.MAX_UPLOAD_SIZE_MB)
+            if not is_valid:
+                shutil.rmtree(job_dir, ignore_errors=True)
+                errors.append({"source": url, "error": error_msg})
+                continue
+            strip_gps_exif(file_path)
+
+            job = Job(id=job_id, status="pending", image_source="url", source_url=url)
+            db.add(job)
+
+            file_size = os.path.getsize(file_path)
+            from PIL import Image
+            try:
+                with Image.open(file_path) as img:
+                    w, h = img.size
+                    mime = Image.MIME.get(img.format, "image/jpeg")
+            except Exception:
+                w, h, mime = None, None, "image/jpeg"
+
+            asset = Asset(job_id=job_id, variant="original", file_path=file_path,
+                         width=w, height=h, mime_type=mime, file_size=file_size)
+            db.add(asset)
+            await db.flush()
+
+            from celery import Celery
+            celery_client = Celery(broker=settings.CELERY_BROKER_URL)
+            celery_client.send_task("worker.tasks.run_pipeline", args=[str(job_id)])
+            created_jobs.append({"job_id": str(job_id), "source": url})
+        except Exception as e:
+            errors.append({"source": url, "error": str(e)})
+
+    await db.commit()
+    return {
+        "created": len(created_jobs),
+        "failed": len(errors),
+        "jobs": created_jobs,
+        "errors": errors,
+    }
+
+
 @router.get("/jobs")
 async def list_jobs(
     page: int = 1,
@@ -278,8 +403,8 @@ async def get_job_results(job_id: uuid.UUID, db: AsyncSession = Depends(get_db))
 
 @router.get("/jobs/{job_id}/export")
 async def export_job(job_id: uuid.UUID, format: str = "json", db: AsyncSession = Depends(get_db)):
-    """Export job results as JSON or HTML report."""
-    from backend.app.services.export import export_json, export_html_report
+    """Export job results as JSON, HTML, or PDF report."""
+    from backend.app.services.export import export_json, export_html_report, export_pdf
 
     result = await db.execute(
         select(Job)
@@ -304,7 +429,14 @@ async def export_job(job_id: uuid.UUID, format: str = "json", db: AsyncSession =
             media_type="application/json",
             headers={"Content-Disposition": f"attachment; filename=tracelens-{job_id}.json"}
         )
-    elif format in ("html", "pdf"):
+    elif format == "pdf":
+        pdf_bytes = export_pdf(job, features, candidates, job.report)
+        return Response(
+            content=bytes(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=tracelens-{job_id}.pdf"}
+        )
+    elif format == "html":
         html = export_html_report(job, features, candidates, job.report)
         return Response(
             content=html,
@@ -312,7 +444,7 @@ async def export_job(job_id: uuid.UUID, format: str = "json", db: AsyncSession =
             headers={"Content-Disposition": f"attachment; filename=tracelens-{job_id}.html"}
         )
     else:
-        raise HTTPException(status_code=400, detail="Format must be 'json' or 'html'")
+        raise HTTPException(status_code=400, detail="Format must be 'json', 'html', or 'pdf'")
 
 
 @router.get("/providers", response_model=list[ProviderInfo])
@@ -415,6 +547,50 @@ async def retry_job_providers(job_id: uuid.UUID, body: RetryRequest, db: AsyncSe
     )
 
     return {"status": "retrying", "job_id": str(job_id), "providers": body.providers}
+
+
+class ScheduleRequest(PydanticBaseModel):
+    interval_hours: int = 24  # Default: daily
+
+
+@router.post("/jobs/{job_id}/schedule")
+async def schedule_recheck(job_id: uuid.UUID, body: ScheduleRequest, db: AsyncSession = Depends(get_db)):
+    """Schedule periodic re-checks for a completed job."""
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "complete":
+        raise HTTPException(status_code=400, detail="Only completed jobs can be scheduled for re-checks")
+    if body.interval_hours < 1 or body.interval_hours > 720:
+        raise HTTPException(status_code=400, detail="Interval must be between 1 and 720 hours")
+
+    from datetime import timedelta
+    job.check_interval_hours = body.interval_hours
+    job.next_check_at = datetime.utcnow() + timedelta(hours=body.interval_hours)
+    await db.commit()
+    await db.refresh(job)
+
+    return {
+        "job_id": str(job_id),
+        "interval_hours": body.interval_hours,
+        "next_check_at": job.next_check_at.isoformat() if job.next_check_at else None,
+    }
+
+
+@router.delete("/jobs/{job_id}/schedule")
+async def cancel_recheck(job_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Cancel scheduled re-checks for a job."""
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job.check_interval_hours = None
+    job.next_check_at = None
+    await db.commit()
+
+    return {"job_id": str(job_id), "scheduled": False}
 
 
 @router.delete("/jobs/{job_id}")

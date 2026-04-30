@@ -2,25 +2,45 @@
 
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Upload, Link, Loader2, AlertCircle } from "lucide-react";
+import { Upload, Link, Loader2, AlertCircle, Images } from "lucide-react";
 
 export default function HomePage() {
   const router = useRouter();
   const [dragActive, setDragActive] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  const [batchFiles, setBatchFiles] = useState<File[]>([]);
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchResult, setBatchResult] = useState<{ created: number; failed: number; jobs: { job_id: string; source: string }[]; errors: { source: string; error: string }[] } | null>(null);
 
   const handleFile = useCallback((f: File) => {
     setFile(f);
+    setBatchFiles([]);
+    setBatchMode(false);
     setUrl("");
     setError("");
+    setBatchResult(null);
     const reader = new FileReader();
     reader.onload = (e) => setPreview(e.target?.result as string);
     reader.readAsDataURL(f);
   }, []);
+
+  const handleMultipleFiles = useCallback((files: FileList) => {
+    if (files.length === 1) {
+      handleFile(files[0]);
+      return;
+    }
+    setBatchMode(true);
+    setBatchFiles(Array.from(files));
+    setFile(null);
+    setPreview(null);
+    setUrl("");
+    setError("");
+    setBatchResult(null);
+  }, [handleFile]);
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -37,15 +57,15 @@ export default function HomePage() {
       e.preventDefault();
       e.stopPropagation();
       setDragActive(false);
-      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-        handleFile(e.dataTransfer.files[0]);
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        handleMultipleFiles(e.dataTransfer.files);
       }
     },
-    [handleFile]
+    [handleMultipleFiles]
   );
 
   const handleSubmit = async () => {
-    if (!file && !url) {
+    if (!file && !url && batchFiles.length === 0) {
       setError("Please upload an image or provide a URL");
       return;
     }
@@ -55,6 +75,34 @@ export default function HomePage() {
 
     try {
       const API_BASE = "";
+
+      // Batch mode: multiple files
+      if (batchMode && batchFiles.length > 0) {
+        const formData = new FormData();
+        batchFiles.forEach((f) => formData.append("files", f));
+
+        const res = await fetch(`${API_BASE}/api/jobs/batch`, {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(errText);
+        }
+
+        const result = await res.json();
+        setBatchResult(result);
+        setLoading(false);
+
+        // If only one succeeded, navigate directly
+        if (result.jobs.length === 1) {
+          router.push(`/jobs/${result.jobs[0].job_id}`);
+        }
+        return;
+      }
+
+      // Single mode
       const formData = new FormData();
       if (file) {
         formData.append("file", file);
@@ -109,13 +157,43 @@ export default function HomePage() {
           id="file-input"
           type="file"
           accept="image/*"
+          multiple
           className="hidden"
           onChange={(e) => {
-            if (e.target.files?.[0]) handleFile(e.target.files[0]);
+            if (e.target.files && e.target.files.length > 0) {
+              handleMultipleFiles(e.target.files);
+            }
           }}
         />
 
-        {preview ? (
+        {batchMode && batchFiles.length > 0 ? (
+          <div className="space-y-4">
+            <Images className="w-12 h-12 mx-auto text-indigo-400" />
+            <p className="text-lg text-gray-300">
+              {batchFiles.length} images selected for batch investigation
+            </p>
+            <div className="flex flex-wrap gap-2 justify-center">
+              {batchFiles.slice(0, 8).map((f, i) => (
+                <span key={i} className="text-xs bg-gray-800 text-gray-400 px-2 py-1 rounded">
+                  {f.name}
+                </span>
+              ))}
+              {batchFiles.length > 8 && (
+                <span className="text-xs text-gray-500">+{batchFiles.length - 8} more</span>
+              )}
+            </div>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setBatchFiles([]);
+                setBatchMode(false);
+              }}
+              className="text-sm text-red-400 hover:text-red-300"
+            >
+              Clear all
+            </button>
+          </div>
+        ) : preview ? (
           <div className="space-y-4">
             <img
               src={preview}
@@ -139,10 +217,10 @@ export default function HomePage() {
             <Upload className="w-12 h-12 mx-auto text-gray-500" />
             <div>
               <p className="text-lg text-gray-300">
-                Drop an image here or click to upload
+                Drop images here or click to upload
               </p>
               <p className="text-sm text-gray-500 mt-1">
-                Supports JPEG, PNG, GIF, WebP (max 50MB)
+                Supports JPEG, PNG, GIF, WebP (max 50MB) &bull; Select multiple for batch
               </p>
             </div>
           </div>
@@ -168,7 +246,10 @@ export default function HomePage() {
               setUrl(e.target.value);
               setFile(null);
               setPreview(null);
+              setBatchFiles([]);
+              setBatchMode(false);
               setError("");
+              setBatchResult(null);
             }}
             className="w-full pl-10 pr-4 py-3 bg-gray-900 border border-gray-700 rounded-xl text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
           />
@@ -183,21 +264,54 @@ export default function HomePage() {
         </div>
       )}
 
+      {/* Batch Result */}
+      {batchResult && (
+        <div className="mt-4 p-4 bg-gray-900/80 border border-gray-700 rounded-xl space-y-3">
+          <p className="text-sm text-gray-300">
+            <span className="text-green-400 font-medium">{batchResult.created} investigations started</span>
+            {batchResult.failed > 0 && (
+              <span className="text-red-400 ml-2">({batchResult.failed} failed)</span>
+            )}
+          </p>
+          <div className="space-y-2">
+            {batchResult.jobs.map((j) => (
+              <a
+                key={j.job_id}
+                href={`/jobs/${j.job_id}`}
+                className="block text-sm text-indigo-400 hover:text-indigo-300 truncate"
+              >
+                → {j.source}
+              </a>
+            ))}
+          </div>
+          {batchResult.errors.length > 0 && (
+            <div className="text-xs text-red-400 space-y-1">
+              {batchResult.errors.map((e, i) => (
+                <p key={i}>{e.source}: {e.error}</p>
+              ))}
+            </div>
+          )}
+          <a href="/jobs" className="inline-block text-sm text-gray-400 hover:text-gray-300 mt-2">
+            View all investigations →
+          </a>
+        </div>
+      )}
+
       {/* Submit */}
       <button
         onClick={handleSubmit}
-        disabled={loading || (!file && !url)}
+        disabled={loading || (!file && !url && batchFiles.length === 0)}
         className="mt-6 w-full py-3 px-6 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-800 disabled:text-gray-500 text-white font-medium rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 hover:shadow-indigo-500/30"
       >
         {loading ? (
           <>
             <Loader2 className="w-5 h-5 animate-spin" />
-            Starting Investigation...
+            {batchMode ? "Starting Batch Investigation..." : "Starting Investigation..."}
           </>
         ) : (
           <>
-            <Upload className="w-5 h-5" />
-            Investigate Image
+            {batchMode ? <Images className="w-5 h-5" /> : <Upload className="w-5 h-5" />}
+            {batchMode ? `Investigate ${batchFiles.length} Images` : "Investigate Image"}
           </>
         )}
       </button>
