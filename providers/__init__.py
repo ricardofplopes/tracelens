@@ -4,6 +4,7 @@ from providers.wikimedia import WikimediaProvider
 from providers.google_lens import GoogleLensProvider
 from providers.yandex import YandexProvider
 from providers.web_search import WebSearchProvider
+from providers.social_media import SocialMediaProvider
 
 
 ALL_PROVIDERS = [
@@ -13,6 +14,7 @@ ALL_PROVIDERS = [
     GoogleLensProvider(),
     YandexProvider(),
     WebSearchProvider(),
+    SocialMediaProvider(),
 ]
 
 

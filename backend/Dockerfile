@@ -17,6 +17,6 @@ COPY shared/ /app/shared/
 ENV PYTHONPATH=/app
 
 COPY backend/entrypoint.sh /app/backend/entrypoint.sh
-RUN chmod +x /app/backend/entrypoint.sh
+RUN sed -i 's/\r$//' /app/backend/entrypoint.sh && chmod +x /app/backend/entrypoint.sh
 
 CMD ["/app/backend/entrypoint.sh"]

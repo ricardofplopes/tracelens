@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     SAUCENAO_ENABLED: bool = True
     WIKIMEDIA_ENABLED: bool = True
     WEB_SEARCH_ENABLED: bool = True
+    SOCIAL_MEDIA_ENABLED: bool = True
     
     # Playwright
     PLAYWRIGHT_TIMEOUT: int = 30000
@@ -37,7 +38,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_API: int = 60  # API calls per minute per IP
 
     # Provider priority (higher = shown first, affects score weighting)
-    PROVIDER_PRIORITIES: str = "google_lens:10,yandex:9,saucenao:8,iqdb:7,wikimedia:6,web_search:5"
+    PROVIDER_PRIORITIES: str = "google_lens:10,yandex:9,saucenao:8,iqdb:7,social_media:6,wikimedia:5,web_search:4"
 
     # Concurrency
     MAX_CONCURRENT_PROVIDERS: int = 4

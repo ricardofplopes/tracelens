@@ -10,6 +10,7 @@ SOURCE_CONFIDENCE = {
     "yandex": 0.85,
     "saucenao": 0.8,
     "iqdb": 0.75,
+    "social_media": 0.65,
     "wikimedia": 0.7,
     "web_search": 0.5,
 }
@@ -100,9 +101,17 @@ def score_candidate(
     # Source confidence multiplier
     source_conf = SOURCE_CONFIDENCE.get(provider_name, 0.5)
 
+    # Match type bonus: visual/similar matches from image-search providers
+    # are inherently more relevant than text-only entity matches
+    match_type = candidate.get("metadata", {}).get("type", "")
+    match_type_from_candidate = candidate.get("match_type", "")
+
     if not scores:
         # No comparison signals — use provider score + source confidence
-        return provider_score * source_conf if provider_score else source_conf * 0.3
+        # Apply a discount for text-only/entity matches without visual confirmation
+        if match_type_from_candidate == "entity" or match_type == "text_extraction":
+            return round(provider_score * source_conf * 0.5 if provider_score else source_conf * 0.15, 4)
+        return round(provider_score * source_conf if provider_score else source_conf * 0.3, 4)
 
     weighted_sum = sum(s * w for s, w in zip(scores, weights))
     total_weight = sum(weights)
