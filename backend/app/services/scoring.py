@@ -11,6 +11,7 @@ SOURCE_CONFIDENCE = {
     "yandex": 0.85,
     "tineye": 0.9,
     "fb_direct_lookup": 0.95,
+    "facecheck": 0.85,
     "saucenao": 0.8,
     "iqdb": 0.75,
     "social_media": 0.65,

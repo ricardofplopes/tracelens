@@ -143,6 +143,11 @@ def run_pipeline(job_id: str):
                 if existing_job:
                     logger.info("cache_hit", existing_job_id=str(existing_job.id), hash=feature.sha256)
                     clone_results(session, existing_job.id, uuid.UUID(job_id))
+                    # Still run FB direct lookup on cache hits (may not have existed for original job)
+                    try:
+                        check_facebook_direct_lookup(session, job_id)
+                    except Exception as e:
+                        logger.debug("fb_direct_lookup_on_cache_hit_skipped", error=str(e))
                     job = session.query(Job).filter(Job.id == uuid.UUID(job_id)).first()
                     job.status = "complete"
                     job.completed_at = datetime.utcnow()
@@ -372,8 +377,77 @@ FB_FILENAME_PATTERN = re.compile(r'^(\d+)_(\d{10,})_(\d+)_[a-z]\.(?:jpg|jpeg|png
 IG_FILENAME_PATTERN = re.compile(r'^(\d{5,})_(\d+)_(\d+)_[a-z]\.(?:jpg|jpeg|png)$', re.IGNORECASE)
 
 
+def _compare_images_perceptual(image_path: str, candidate_image_bytes: bytes, threshold: int = 15) -> float:
+    """Compare uploaded image with a candidate image using perceptual hashing.
+    Returns similarity score 0.0-1.0 (1.0 = identical)."""
+    try:
+        from PIL import Image
+        import imagehash
+        from io import BytesIO
+
+        img1 = Image.open(image_path)
+        img2 = Image.open(BytesIO(candidate_image_bytes))
+
+        # Compare using multiple hash types for robustness
+        phash1 = imagehash.phash(img1)
+        phash2 = imagehash.phash(img2)
+        phash_diff = phash1 - phash2
+
+        ahash1 = imagehash.average_hash(img1)
+        ahash2 = imagehash.average_hash(img2)
+        ahash_diff = ahash1 - ahash2
+
+        # Convert hamming distance to similarity (0-64 range for 8x8 hash)
+        phash_sim = max(0.0, 1.0 - (phash_diff / 64.0))
+        ahash_sim = max(0.0, 1.0 - (ahash_diff / 64.0))
+
+        # Weighted average
+        similarity = (phash_sim * 0.7) + (ahash_sim * 0.3)
+        return similarity
+    except Exception as e:
+        logger.debug("perceptual_compare_failed", error=str(e))
+        return 0.0
+
+
+def _fetch_og_image_url(html: str) -> str | None:
+    """Extract og:image URL from HTML."""
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        # Try multiple meta tag formats
+        for prop in ["og:image", "twitter:image", "twitter:image:src"]:
+            og_img = soup.find("meta", property=prop) or soup.find("meta", attrs={"name": prop})
+            if og_img and og_img.get("content"):
+                url = og_img["content"]
+                if url.startswith("http"):
+                    return url
+    except Exception:
+        pass
+    return None
+
+
+def _download_image(url: str, timeout: int = 15) -> bytes | None:
+    """Download an image from URL, return bytes or None."""
+    try:
+        resp = sync_httpx.get(
+            url,
+            follow_redirects=True,
+            timeout=timeout,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+        )
+        if resp.status_code == 200 and len(resp.content) > 1000:
+            content_type = resp.headers.get("content-type", "")
+            if "image" in content_type or resp.content[:4] in (b'\xff\xd8\xff\xe0', b'\xff\xd8\xff\xe1', b'\x89PNG'):
+                return resp.content
+    except Exception as e:
+        logger.debug("image_download_failed", url=url[:80], error=str(e))
+    return None
+
+
 def check_facebook_direct_lookup(session: Session, job_id: str):
-    """Try to construct a direct Facebook URL from the filename pattern."""
+    """Try to construct and VERIFY a direct Facebook URL from the filename pattern."""
     job = session.query(Job).filter(Job.id == uuid.UUID(job_id)).first()
     if not job or not job.original_filename:
         return
@@ -383,22 +457,20 @@ def check_facebook_direct_lookup(session: Session, job_id: str):
     if not match:
         return
 
-    # The second number group is typically the photo's unique Facebook ID
-    photo_id = match.group(2)
+    # Extract IDs from filename
     user_id = match.group(1)
-
-    # Construct candidate Facebook URLs
-    fb_urls = [
-        f"https://www.facebook.com/photo/?fbid={photo_id}",
-        f"https://www.facebook.com/photo.php?fbid={photo_id}",
-    ]
-
-    # Also try user profile URL
-    fb_profile_url = f"https://www.facebook.com/profile.php?id={user_id}"
+    photo_id = match.group(2)
 
     logger.info("fb_direct_lookup", job_id=job_id, photo_id=photo_id, user_id=user_id)
 
-    # Create a provider run for this
+    # Get the original image path for comparison
+    original_asset = session.query(Asset).filter(
+        Asset.job_id == uuid.UUID(job_id),
+        Asset.variant == "original",
+    ).first()
+    original_path = original_asset.file_path if original_asset else None
+
+    # Create a provider run
     provider_run = ProviderRun(
         job_id=uuid.UUID(job_id),
         provider_name="fb_direct_lookup",
@@ -410,56 +482,71 @@ def check_facebook_direct_lookup(session: Session, job_id: str):
 
     results_added = 0
 
-    # Check each URL for accessibility
-    for url in fb_urls:
-        try:
-            resp = sync_httpx.head(
-                url,
-                follow_redirects=True,
-                timeout=10,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    # Strategy 1: Fetch the Facebook photo page and extract OG image
+    fb_photo_url = f"https://www.facebook.com/photo/?fbid={photo_id}"
+    try:
+        resp = sync_httpx.get(
+            fb_photo_url,
+            follow_redirects=True,
+            timeout=15,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        if resp.status_code == 200:
+            og_image_url = _fetch_og_image_url(resp.text)
+            similarity = 0.0
+            verified = False
+
+            if og_image_url and original_path:
+                img_bytes = _download_image(og_image_url)
+                if img_bytes:
+                    similarity = _compare_images_perceptual(original_path, img_bytes)
+                    verified = similarity > 0.70
+                    logger.info("fb_og_image_compared", similarity=similarity, verified=verified)
+
+            # Add result with appropriate confidence based on verification
+            confidence = 0.95 if verified else 0.70
+            match_type = "verified_match" if verified else "url_match"
+
+            candidate = CandidateResult(
+                job_id=uuid.UUID(job_id),
+                provider_run_id=provider_run.id,
+                source_url=fb_photo_url,
+                page_title=f"Facebook Photo (ID: {photo_id})" + (" ✓ Verified" if verified else ""),
+                thumbnail_url=og_image_url or "",
+                match_type=match_type,
+                similarity_score=similarity if verified else 0.80,
+                confidence=confidence,
+                extracted_text=f"Facebook photo URL from filename pattern. Perceptual similarity: {similarity:.2f}",
+                extra_data={
+                    "provider": "fb_direct_lookup",
+                    "photo_id": photo_id,
+                    "user_id": user_id,
+                    "method": "filename_pattern_verified" if verified else "filename_pattern",
+                    "og_image_url": og_image_url,
+                    "similarity": similarity,
                 },
             )
-            # If we get a 200 or redirect to a valid FB page, it's likely valid
-            if resp.status_code in (200, 301, 302):
-                candidate = CandidateResult(
-                    job_id=uuid.UUID(job_id),
-                    provider_run_id=provider_run.id,
-                    provider_name="fb_direct_lookup",
-                    source_url=url,
-                    page_title=f"Facebook Photo (ID: {photo_id})",
-                    thumbnail_url="",
-                    match_type="exact",
-                    similarity_score=0.95,
-                    confidence=0.95,
-                    extracted_text=f"Direct Facebook photo URL constructed from filename: {filename}",
-                    extra_data={
-                        "provider": "fb_direct_lookup",
-                        "photo_id": photo_id,
-                        "user_id": user_id,
-                        "method": "filename_pattern",
-                    },
-                )
-                session.add(candidate)
-                results_added += 1
-                break  # Only add first working URL
-        except Exception as e:
-            logger.debug("fb_direct_url_check_failed", url=url, error=str(e))
-            continue
+            session.add(candidate)
+            results_added += 1
+    except Exception as e:
+        logger.debug("fb_photo_page_fetch_failed", error=str(e))
 
-    # Also add profile URL as a lower-confidence result
+    # Strategy 2: Always add profile URL as context (lower confidence)
+    fb_profile_url = f"https://www.facebook.com/profile.php?id={user_id}"
     candidate_profile = CandidateResult(
         job_id=uuid.UUID(job_id),
         provider_run_id=provider_run.id,
-        provider_name="fb_direct_lookup",
         source_url=fb_profile_url,
-        page_title=f"Facebook Profile (ID: {user_id})",
+        page_title=f"Facebook Profile (User ID: {user_id})",
         thumbnail_url="",
         match_type="social_profile",
-        similarity_score=0.8,
-        confidence=0.75,
-        extracted_text=f"Facebook profile associated with image uploader (user ID: {user_id})",
+        similarity_score=0.70,
+        confidence=0.60,
+        extracted_text=f"Facebook profile associated with image (user ID extracted from filename: {filename})",
         extra_data={
             "provider": "fb_direct_lookup",
             "user_id": user_id,

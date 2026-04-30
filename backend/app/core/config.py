@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     SOCIAL_MEDIA_ENABLED: bool = True
     TINEYE_ENABLED: bool = True
     BING_VISUAL_ENABLED: bool = True
+    FACECHECK_ENABLED: bool = True
     
     # Playwright
     PLAYWRIGHT_TIMEOUT: int = 30000

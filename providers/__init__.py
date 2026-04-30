@@ -7,6 +7,7 @@ from providers.web_search import WebSearchProvider
 from providers.social_media import SocialMediaProvider
 from providers.tineye import TinEyeProvider
 from providers.bing_visual import BingVisualProvider
+from providers.facecheck import FaceCheckProvider
 
 
 ALL_PROVIDERS = [
@@ -19,6 +20,7 @@ ALL_PROVIDERS = [
     SocialMediaProvider(),
     TinEyeProvider(),
     BingVisualProvider(),
+    FaceCheckProvider(),
 ]
 
 

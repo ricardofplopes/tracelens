@@ -57,20 +57,22 @@ Supports **batch processing** (multiple images at once) and **scheduled re-check
 | Web Search      | Stable  | ✅ Enabled   | DuckDuckGo HTML fallback   |
 | Social Media    | Stable  | ✅ Enabled   | DuckDuckGo site: search (FB, IG, X, etc.) |
 | Bing Visual     | Stable  | ✅ Enabled   | Playwright browser automation |
+| FaceCheck.ID    | Experimental | ✅ Enabled | Face recognition search (social media) |
 | TinEye          | Experimental | ✅ Enabled | Playwright browser automation |
 | Google Lens     | Experimental | ✅ Enabled | Playwright browser automation |
 | Yandex Images   | Experimental | ✅ Enabled | Playwright browser automation |
-| FB Direct Lookup| Stable  | ✅ Auto      | Filename pattern → direct URL |
+| FB Direct Lookup| Stable  | ✅ Auto      | Filename pattern → verified URL |
 
 ### Facebook/Instagram Image Lookup
 
 TraceLens has multiple strategies for finding images on social media:
 
-1. **FB Direct Lookup** — Automatically detects Facebook filename patterns (e.g., `466783204_10227334955624436_7361951811193389139_n.jpg`) and constructs direct Facebook photo/profile URLs from the embedded IDs.
-2. **Bing Visual Search** — Microsoft has deep integration with Facebook/Instagram content and indexes public posts effectively.
-3. **TinEye** — Reverse image search that may find exact matches on social platforms.
-4. **Social Media Provider** — Text-based search across Facebook, Instagram, LinkedIn, Twitter, Pinterest, Reddit, TikTok via DuckDuckGo `site:` queries.
-5. **Google Lens** — May find visually similar images that appear on social platforms.
+1. **FB Direct Lookup** — Detects Facebook filename patterns, constructs photo/profile URLs, fetches OG image, and verifies match via perceptual hash comparison. Produces verified results when possible.
+2. **FaceCheck.ID** — Face recognition reverse image search specifically designed for finding people on social media (Facebook, Instagram, LinkedIn, Twitter, TikTok).
+3. **Bing Visual Search** — Microsoft has deep integration with Facebook/Instagram content and indexes public posts effectively.
+4. **TinEye** — Reverse image search that may find exact matches on social platforms.
+5. **Social Media Provider** — Text-based search across Facebook, Instagram, LinkedIn, Twitter, Pinterest, Reddit, TikTok via DuckDuckGo `site:` queries. Uses person-specific AI-generated search terms.
+6. **Google Lens** — May find visually similar images that appear on social platforms.
 
 > **Note**: Private Facebook/Instagram posts are not accessible to any reverse image search engine. Results depend on the profile's public visibility.
 

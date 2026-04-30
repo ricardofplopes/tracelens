@@ -125,7 +125,28 @@ Format your response as structured text with clear labels for each category."""
 
         evidence = "\n".join(evidence_parts)
 
-        prompt = f"""Based on the following evidence about an image, generate 3-5 specific search queries that would help find this image or similar images online. Each query should be on a separate line.
+        # Detect if this is a person/portrait photo for social-media-oriented queries
+        is_person_photo = any(
+            kw in (analysis.get("raw_description", "") or "").lower()
+            for kw in ["person", "man", "woman", "face", "portrait", "selfie", "headshot", "profile"]
+        )
+
+        if is_person_photo:
+            prompt = f"""Based on the following evidence about a person's photo, generate 5-7 search queries to find this person or this image online, especially on social media.
+
+Focus on:
+- The person's distinguishing features (apparent age, hair, facial features, glasses, etc.)
+- Any name, text, or username visible
+- The setting/context (professional photo, casual, event, etc.)
+- Include at least 2 queries specifically targeting social media (e.g., "site:facebook.com" or "site:instagram.com" variations)
+- Include a physical description query that could match social media profiles
+
+Evidence:
+{evidence}
+
+Generate search queries (one per line, no numbering or bullets):"""
+        else:
+            prompt = f"""Based on the following evidence about an image, generate 3-5 specific search queries that would help find this image or similar images online. Each query should be on a separate line.
 
 Focus on:
 - Specific identifiable elements (people, brands, landmarks)
@@ -148,7 +169,7 @@ Generate search queries (one per line, no numbering or bullets):"""
                 if term and len(term) > 3:
                     cleaned.append(term)
             logger.info("search_terms_generated", count=len(cleaned))
-            return cleaned[:5]
+            return cleaned[:7 if is_person_photo else 5]
         except Exception as e:
             logger.error("search_term_generation_failed", error=str(e))
             # Fallback: use entities and OCR text directly
